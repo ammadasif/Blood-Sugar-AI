@@ -195,11 +195,18 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           }
         }
 
-        // Check URL for QR Code import: ?import=COMPRESSED_DATA
-        const importParam = urlParams.get('import');
+        // Check URL for Import link: ?import=COMPRESSED_DATA (also check hash if redirected)
+        let importParam = urlParams.get('import');
+        if (!importParam && window.location.hash.includes('import=')) {
+          const hashQuery = window.location.hash.includes('?') 
+            ? window.location.hash.split('?')[1] 
+            : window.location.hash.slice(1);
+          importParam = new URLSearchParams(hashQuery).get('import');
+        }
+
         if (importParam) {
           try {
-            setSyncNotice('QR Code se data import ho raha hai...');
+            setSyncNotice('Data import ho raha hai...');
             const importedReadings = await cloudSyncService.decodeImportParam(importParam);
             if (importedReadings && importedReadings.length > 0) {
               const currentLocal = await dbService.getAllReadings();
@@ -207,12 +214,19 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               await dbService.clearAllReadings();
               await dbService.bulkAddReadings(merged);
               await reloadData();
-              setSyncNotice(`✅ QR Code se ${newCount} nayi readings import ho gayi! Total: ${merged.length}`);
+              setSyncNotice(`✅ ${newCount > 0 ? `${newCount} nayi readings import ho gayi!` : 'All readings synced!'} Total: ${merged.length}`);
+              // Clean URL query without full reload
               window.history.replaceState({}, document.title, window.location.pathname);
+              setTimeout(() => setSyncNotice(null), 7000);
               return;
+            } else {
+              setSyncNotice('❌ Import link invalid tha ya readings decode nahi hui.');
+              setTimeout(() => setSyncNotice(null), 5000);
             }
           } catch (e) {
             console.warn('QR import failed:', e);
+            setSyncNotice('❌ Data import karne mein error aaya.');
+            setTimeout(() => setSyncNotice(null), 5000);
           }
         }
 

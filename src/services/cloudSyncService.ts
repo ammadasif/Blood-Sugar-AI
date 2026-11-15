@@ -158,7 +158,31 @@ class CloudSyncService {
   }
 
   // ───────────────────────────────────────────────
+  // SHORTEN URL via TinyURL (free, no auth, CORS open)
+  // Falls back to original URL if network unavailable
+  // ───────────────────────────────────────────────
+  public async shortenUrl(longUrl: string): Promise<string> {
+    try {
+      const res = await fetch(
+        `https://tinyurl.com/api-create.php?url=${encodeURIComponent(longUrl)}`,
+        { signal: AbortSignal.timeout(6000) }
+      );
+      if (res.ok) {
+        const short = (await res.text()).trim();
+        // Validate it looks like a TinyURL
+        if (short.startsWith('https://tinyurl.com/') || short.startsWith('http://tinyurl.com/')) {
+          return short;
+        }
+      }
+    } catch {
+      // Network unavailable — return original
+    }
+    return longUrl;
+  }
+
+  // ───────────────────────────────────────────────
   // QR CODE IMAGE URL (uses free qrserver.com API)
+  // Best with short URLs for scannable QR codes
   // ───────────────────────────────────────────────
   public getQRCodeImageUrl(dataUrl: string, size = 240): string {
     const encoded = encodeURIComponent(dataUrl);

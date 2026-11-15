@@ -12,7 +12,7 @@ import { SettingsView } from './views/SettingsView';
 import { HeartPulse } from 'lucide-react';
 
 const MainLayout: React.FC = () => {
-  const { activeTab, isLoading } = useBloodSugar();
+  const { activeTab, isLoading, syncNotice } = useBloodSugar();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const renderActiveView = () => {
@@ -57,6 +57,16 @@ const MainLayout: React.FC = () => {
       {/* Main Content Area (offset by sidebar width on large screens) */}
       <div className="lg:pl-64 flex flex-col flex-1 min-h-screen transition-all">
         <Header onOpenMobileMenu={() => setMobileSidebarOpen(true)} />
+
+        {/* Sync Toast Notification */}
+        {syncNotice && (
+          <div className="mx-4 mt-3 sm:mx-6 lg:mx-8 p-3.5 rounded-2xl bg-slate-900 text-white dark:bg-blue-950 dark:border dark:border-blue-800 shadow-xl flex items-center justify-between gap-3 animate-fade-in z-30">
+            <div className="flex items-center gap-2.5 text-xs font-semibold">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span>{syncNotice}</span>
+            </div>
+          </div>
+        )}
 
         <main className="flex-1 p-4 sm:p-6 lg:p-8">{renderActiveView()}</main>
 

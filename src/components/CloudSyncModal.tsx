@@ -14,6 +14,7 @@ import {
   Mail,
   Link2,
   Zap,
+  QrCode,
 } from 'lucide-react';
 import { useBloodSugar } from '../context/BloodSugarContext';
 import { cloudSyncService } from '../services/cloudSyncService';
@@ -34,7 +35,9 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({ isOpen, onClose 
   const [feedbackMsg, setFeedbackMsg] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
   // Share link state
-  const [shareUrl, setShareUrl] = useState<string>('');
+  const [shareUrl, setShareUrl] = useState<string>('');       // original long URL
+  const [shortUrl, setShortUrl] = useState<string>('');       // tinyurl short
+  const [qrImgUrl, setQrImgUrl] = useState<string>('');       // QR image of short URL
   const [shareLoading, setShareLoading] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
 
@@ -43,48 +46,62 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({ isOpen, onClose 
   const cleanUser = cloudSyncService.sanitizeUsername(inputUsername);
   const mobileSyncUrl = cleanUser ? cloudSyncService.generateMobileSyncUrl(cleanUser) : '';
 
-  // ─── GENERATE SHARE LINK ─────────────────────────────────────
+  // ─── GENERATE + SHORTEN LINK ────────────────────────────────
   const handleGenerateLink = async () => {
     if (readings.length === 0) {
       setFeedbackMsg({ text: 'Koi readings nahi hain. Pehle readings add karein.', type: 'error' });
       return;
     }
     setShareLoading(true);
-    setFeedbackMsg(null);
+    setShareUrl('');
+    setShortUrl('');
+    setQrImgUrl('');
+    setFeedbackMsg({ text: '⏳ Link generate aur short ho raha hai...', type: 'info' });
     try {
-      const url = await cloudSyncService.generateQRTransferUrl(readings);
-      setShareUrl(url);
+      // 1. Build compressed import URL
+      const longUrl = await cloudSyncService.generateQRTransferUrl(readings);
+      setShareUrl(longUrl);
+
+      // 2. Shorten via TinyURL
+      const short = await cloudSyncService.shortenUrl(longUrl);
+      setShortUrl(short);
+
+      // 3. QR code from short URL (very scannable now!)
+      setQrImgUrl(cloudSyncService.getQRCodeImageUrl(short, 240));
+
       setFeedbackMsg({
-        text: `✅ Link ready! Neeche WhatsApp ya Email se mobile par bhejein.`,
+        text: `✅ Short link ready! ${readings.length} readings encode ho gayi.\nQR scan karein ya WhatsApp/Email se bhejein.`,
         type: 'success',
       });
     } catch {
-      setFeedbackMsg({ text: 'Link generate karne mein error aaya. Try again.', type: 'error' });
+      setFeedbackMsg({ text: 'Link generate karne mein error. Try again.', type: 'error' });
     } finally {
       setShareLoading(false);
     }
   };
 
+  const displayUrl = shortUrl || shareUrl;
+
   const handleCopyLink = async () => {
-    if (!shareUrl) return;
+    if (!displayUrl) return;
     try {
-      await navigator.clipboard.writeText(shareUrl);
+      await navigator.clipboard.writeText(displayUrl);
       setLinkCopied(true);
       setTimeout(() => setLinkCopied(false), 2500);
     } catch {}
   };
 
   const handleWhatsApp = () => {
-    if (!shareUrl) return;
-    const msg = encodeURIComponent(`GlucoTrack data sync link:\n${shareUrl}`);
+    if (!displayUrl) return;
+    const msg = encodeURIComponent(`GlucoTrack data:\n${displayUrl}`);
     window.open(`https://wa.me/?text=${msg}`, '_blank');
   };
 
   const handleEmail = () => {
-    if (!shareUrl) return;
-    const subject = encodeURIComponent('GlucoTrack Blood Sugar Data - Sync Link');
-    const body = encodeURIComponent(`Mobile par yeh link open karein apna blood sugar data sync karne ke liye:\n\n${shareUrl}\n\nLink open hote hi data automatic import ho jayega.`);
-    window.open(`mailto:?subject=${subject}&body=${body}`, '_blank');
+    if (!displayUrl) return;
+    const sub = encodeURIComponent('GlucoTrack Blood Sugar Data - Sync Link');
+    const body = encodeURIComponent(`Mobile par yeh link open karein:\n\n${displayUrl}\n\nLink open hote hi data automatic import ho jayega.`);
+    window.open(`mailto:?subject=${sub}&body=${body}`, '_blank');
   };
 
   // ─── USERNAME SYNC ───────────────────────────────────────────
@@ -227,10 +244,47 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({ isOpen, onClose 
               </button>
 
               {/* Share Options — shown after link generated */}
-              {shareUrl && (
+              {displayUrl && (
                 <div className="space-y-3">
 
-                  {/* Primary Share Buttons */}
+                  {/* Short URL display + copy */}
+                  <div className="flex items-center gap-2 p-3 bg-slate-900 dark:bg-black rounded-2xl border border-slate-700">
+                    <div className="flex-1 overflow-hidden">
+                      <p className="text-[9px] text-slate-400 uppercase tracking-wider mb-0.5">
+                        {shortUrl ? '⚡ Short URL (Clean & Scannable)' : '🔗 Direct Transfer URL'}
+                      </p>
+                      <p className="text-xs sm:text-sm font-mono font-bold text-emerald-400 truncate">
+                        {displayUrl}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleCopyLink}
+                      className="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-sm"
+                    >
+                      {linkCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      {linkCopied ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+
+                  {/* QR Code (scannable in 1 second now because TinyURL is ~25 chars!) */}
+                  {qrImgUrl && (
+                    <div className="flex flex-col items-center gap-2 p-3 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700">
+                      <div className="p-2.5 bg-white rounded-2xl border-2 border-emerald-400 shadow-md inline-block">
+                        <img
+                          src={qrImgUrl}
+                          alt="Sync Short QR Code"
+                          className="w-40 h-40 sm:w-48 sm:h-48"
+                        />
+                      </div>
+                      <p className="text-[11px] text-slate-600 dark:text-slate-300 text-center font-medium flex items-center gap-1.5">
+                        <QrCode className="w-3.5 h-3.5 text-emerald-500" />
+                        <span>Ab QR Code direct camera se scan ho jayega (Short URL)</span>
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Quick Share Buttons */}
                   <div className="grid grid-cols-2 gap-2.5">
                     {/* WhatsApp */}
                     <button
@@ -253,31 +307,13 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({ isOpen, onClose 
                     </button>
                   </div>
 
-                  {/* Copy Link (manual fallback) */}
-                  <div className="flex items-center gap-2 p-3 bg-slate-50 dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700">
-                    <div className="flex-1 overflow-hidden">
-                      <p className="text-[10px] text-slate-400 font-medium mb-0.5">Link (browser address bar mein paste karein):</p>
-                      <p className="text-[11px] font-mono text-slate-600 dark:text-slate-300 truncate">
-                        {shareUrl.slice(0, 55)}...
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleCopyLink}
-                      className="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition"
-                    >
-                      {linkCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                      {linkCopied ? 'Copied!' : 'Copy'}
-                    </button>
-                  </div>
-
                   {/* Mobile instructions box */}
                   <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 rounded-2xl border border-emerald-200 dark:border-emerald-800">
                     <p className="text-[11px] text-emerald-700 dark:text-emerald-300 font-medium flex items-start gap-1.5">
                       <Smartphone className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                       <span>
-                        Mobile par link khola? Browser mein URL load hote hi aapka data
-                        <strong> automatically import</strong> ho jayega aur dashboard par dikh jayega! ✅
+                        Mobile camera se scan karein ya WhatsApp link tap karein — 
+                        <strong> automatically saari readings load ho jayengi!</strong> ✅
                       </span>
                     </p>
                   </div>
