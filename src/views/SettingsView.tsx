@@ -452,6 +452,17 @@ export const SettingsView: React.FC = () => {
               </div>
             </div>
 
+            {storageLimit < readings.length && (
+              <div className="p-3 bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 rounded-xl flex items-start gap-2.5 text-xs text-amber-800 dark:text-amber-200 animate-fade-in">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <p>
+                  <strong>Warning:</strong> You currently have <strong>{readings.length}</strong> recorded readings.
+                  Setting the limit to <strong>{storageLimit}</strong> with auto-delete enabled will prune{' '}
+                  <strong>{readings.length - storageLimit}</strong> of your oldest readings. Consider downloading an Excel or JSON backup before saving.
+                </p>
+              </div>
+            )}
+
             <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 flex items-start gap-3">
               <input
                 type="checkbox"

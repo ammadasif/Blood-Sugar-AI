@@ -114,14 +114,51 @@ export async function parseExcelFile(
     // Standardize date (YYYY-MM-DD)
     let parsedDate = '';
     if (dateVal) {
-      const parsedD = new Date(dateVal);
-      if (!isNaN(parsedD.getTime())) {
-        const y = parsedD.getFullYear();
-        const m = String(parsedD.getMonth() + 1).padStart(2, '0');
-        const d = String(parsedD.getDate()).padStart(2, '0');
-        parsedDate = `${y}-${m}-${d}`;
-      } else if (/^\d{4}-\d{2}-\d{2}$/.test(dateVal)) {
-        parsedDate = dateVal;
+      const trimmedDate = String(dateVal).trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(trimmedDate)) {
+        parsedDate = trimmedDate;
+      } else if (/^\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4}$/.test(trimmedDate)) {
+        const parts = trimmedDate.split(/[\/\-\.]/);
+        const p0 = parseInt(parts[0], 10);
+        const p1 = parseInt(parts[1], 10);
+        const p2 = parseInt(parts[2], 10);
+        if (p0 > 12) {
+          // DD/MM/YYYY format
+          parsedDate = `${p2}-${String(p1).padStart(2, '0')}-${String(p0).padStart(2, '0')}`;
+        } else if (p1 > 12) {
+          // MM/DD/YYYY format
+          parsedDate = `${p2}-${String(p0).padStart(2, '0')}-${String(p1).padStart(2, '0')}`;
+        } else {
+          // Fallback based on standard date parse
+          const parsedD = new Date(trimmedDate);
+          if (!isNaN(parsedD.getTime())) {
+            const y = parsedD.getFullYear();
+            const m = String(parsedD.getMonth() + 1).padStart(2, '0');
+            const d = String(parsedD.getDate()).padStart(2, '0');
+            parsedDate = `${y}-${m}-${d}`;
+          } else {
+            // Default to YYYY-MM-DD assuming DD/MM/YYYY
+            parsedDate = `${p2}-${String(p1).padStart(2, '0')}-${String(p0).padStart(2, '0')}`;
+          }
+        }
+      } else if (!isNaN(Number(trimmedDate)) && Number(trimmedDate) > 30000 && Number(trimmedDate) < 70000) {
+        // Excel serial date number
+        const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+        const jsDate = new Date(excelEpoch.getTime() + Number(trimmedDate) * 86400000);
+        if (!isNaN(jsDate.getTime())) {
+          const y = jsDate.getUTCFullYear();
+          const m = String(jsDate.getUTCMonth() + 1).padStart(2, '0');
+          const d = String(jsDate.getUTCDate()).padStart(2, '0');
+          parsedDate = `${y}-${m}-${d}`;
+        }
+      } else {
+        const parsedD = new Date(trimmedDate);
+        if (!isNaN(parsedD.getTime())) {
+          const y = parsedD.getFullYear();
+          const m = String(parsedD.getMonth() + 1).padStart(2, '0');
+          const d = String(parsedD.getDate()).padStart(2, '0');
+          parsedDate = `${y}-${m}-${d}`;
+        }
       }
     }
 

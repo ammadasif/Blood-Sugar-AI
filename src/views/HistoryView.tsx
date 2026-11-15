@@ -51,14 +51,18 @@ export const HistoryView: React.FC = () => {
   const filteredReadings = useMemo(() => {
     return readings
       .filter((r) => {
-        // Search query filter (matches notes, mealInfo, comments)
+        // Search query filter (matches notes, mealInfo, comments, value, type, date)
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
           const matchesMeal = (r.mealInfo || '').toLowerCase().includes(q);
           const matchesNotes = (r.notes || '').toLowerCase().includes(q);
           const matchesComments = (r.comments || '').toLowerCase().includes(q);
           const matchesType = (READING_TYPE_LABELS[r.type] || '').toLowerCase().includes(q);
-          if (!matchesMeal && !matchesNotes && !matchesComments && !matchesType) {
+          const matchesValue =
+            String(r.value).includes(q) ||
+            String(convertFromInternal(r.value, settings.unit)).includes(q);
+          const matchesDate = r.date.includes(q);
+          if (!matchesMeal && !matchesNotes && !matchesComments && !matchesType && !matchesValue && !matchesDate) {
             return false;
           }
         }
