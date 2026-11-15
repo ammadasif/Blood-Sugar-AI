@@ -166,3 +166,4 @@ GlucoTrack Pro operates **exclusively in your browser**:
 ## Medical Disclaimer
 
 GlucoTrack Pro is intended for personal informational monitoring and health tracking only. It does not provide medical diagnoses, treatment decisions, or replace consultation with a licensed physician or certified diabetes care and education specialist.
+

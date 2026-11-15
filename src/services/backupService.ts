@@ -152,3 +152,4 @@ export function exportTXT(readings: BloodSugarReading[], settings: AppSettings):
   const dateStr = new Date().toISOString().split('T')[0];
   downloadFile(content, `GlucoTrack_Log_${dateStr}.txt`, 'text/plain;charset=utf-8;');
 }
+

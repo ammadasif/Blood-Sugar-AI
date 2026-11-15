@@ -266,3 +266,4 @@ export const AnalysisModal: React.FC<AnalysisModalProps> = ({
     </div>
   );
 };
+

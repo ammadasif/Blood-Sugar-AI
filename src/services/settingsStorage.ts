@@ -86,3 +86,4 @@ class SettingsStorageService {
 }
 
 export const settingsService = new SettingsStorageService();
+

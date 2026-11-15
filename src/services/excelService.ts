@@ -295,3 +295,163 @@ export function exportToExcel(
   const filename = `GlucoTrack_Readings_${filterDescription.replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().split('T')[0]}.xlsx`;
   XLSX.writeFile(workbook, filename);
 }
+
+/**
+ * Generates and downloads a ready-to-use sample Excel Import Template (.xlsx)
+ */
+export function downloadExcelTemplate(unit: 'mg/dL' | 'mmol/L' = 'mg/dL'): void {
+  const isMmol = unit === 'mmol/L';
+  const templateRows = [
+    {
+      'Date': '2026-11-15',
+      'Time': '07:30',
+      'Blood Sugar': isMmol ? 5.2 : 94,
+      'Unit': unit,
+      'Reading Type': 'Fasting',
+      'Meal Information': '',
+      'Notes': 'Woke up well rested',
+      'Comments': 'Morning baseline',
+    },
+    {
+      'Date': '2026-11-15',
+      'Time': '09:30',
+      'Blood Sugar': isMmol ? 6.8 : 122,
+      'Unit': unit,
+      'Reading Type': '2 Hours After Meal',
+      'Meal Information': 'Oatmeal with almonds & blueberries',
+      'Notes': 'Felt good energy',
+      'Comments': 'Post-breakfast check',
+    },
+    {
+      'Date': '2026-11-15',
+      'Time': '13:00',
+      'Blood Sugar': isMmol ? 5.4 : 98,
+      'Unit': unit,
+      'Reading Type': 'Before Meal',
+      'Meal Information': 'Pre-lunch',
+      'Notes': '',
+      'Comments': '',
+    },
+    {
+      'Date': '2026-11-15',
+      'Time': '15:00',
+      'Blood Sugar': isMmol ? 7.6 : 138,
+      'Unit': unit,
+      'Reading Type': '2 Hours After Meal',
+      'Meal Information': 'Grilled chicken salad with olive oil',
+      'Notes': 'Light 15 min walk after lunch',
+      'Comments': '',
+    },
+    {
+      'Date': '2026-11-15',
+      'Time': '22:15',
+      'Blood Sugar': isMmol ? 5.8 : 105,
+      'Unit': unit,
+      'Reading Type': 'Random',
+      'Meal Information': '',
+      'Notes': 'Bedtime check',
+      'Comments': 'Normal day',
+    },
+  ];
+
+  const worksheet = XLSX.utils.json_to_sheet(templateRows);
+
+  worksheet['!cols'] = [
+    { wch: 14 }, // Date
+    { wch: 10 }, // Time
+    { wch: 14 }, // Blood Sugar
+    { wch: 10 }, // Unit
+    { wch: 22 }, // Reading Type
+    { wch: 35 }, // Meal Information
+    { wch: 30 }, // Notes
+    { wch: 25 }, // Comments
+  ];
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Readings_Template');
+
+  // Sheet 2: Column instructions & guide
+  const guideRows = [
+    {
+      'Column Header': 'Date',
+      'Required': 'YES',
+      'Accepted Formats': 'YYYY-MM-DD (e.g. 2026-11-15), MM/DD/YYYY, or DD/MM/YYYY',
+      'Description': 'The date the measurement was recorded.',
+    },
+    {
+      'Column Header': 'Time',
+      'Required': 'YES',
+      'Accepted Formats': 'HH:mm (24-hour e.g. 07:30, 20:45) or 12-hour (7:30 AM, 8:45 PM)',
+      'Description': 'The time the test was performed.',
+    },
+    {
+      'Column Header': 'Blood Sugar',
+      'Required': 'YES',
+      'Accepted Formats': 'Number (e.g. 95, 120, or 5.4)',
+      'Description': 'Blood glucose test numeric value.',
+    },
+    {
+      'Column Header': 'Unit',
+      'Required': 'Optional',
+      'Accepted Formats': 'mg/dL or mmol/L',
+      'Description': 'Unit of entry (automatically converted to internal storage).',
+    },
+    {
+      'Column Header': 'Reading Type',
+      'Required': 'YES',
+      'Accepted Formats': 'Fasting, Before Meal, 1 Hour After Meal, 2 Hours After Meal, Random',
+      'Description': 'Contextual category used for clinical evaluation.',
+    },
+    {
+      'Column Header': 'Meal Information',
+      'Required': 'Optional',
+      'Accepted Formats': 'Free text (e.g. Oatmeal, Chicken Salad)',
+      'Description': 'Food and drinks consumed before or around the test.',
+    },
+    {
+      'Column Header': 'Notes',
+      'Required': 'Optional',
+      'Accepted Formats': 'Free text (e.g. 20 min walk, Felt dizzy)',
+      'Description': 'Symptoms, activities, or medications.',
+    },
+    {
+      'Column Header': 'Comments',
+      'Required': 'Optional',
+      'Accepted Formats': 'Free text',
+      'Description': 'Additional notes for personal reference or doctor.',
+    },
+  ];
+
+  const guideSheet = XLSX.utils.json_to_sheet(guideRows);
+  guideSheet['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 45 }, { wch: 45 }];
+  XLSX.utils.book_append_sheet(workbook, guideSheet, 'Instructions_Guide');
+
+  XLSX.writeFile(workbook, `GlucoTrack_Import_Template_${unit.replace('/', '_')}.xlsx`);
+}
+
+/**
+ * Generates and downloads a ready-to-use CSV Import Template (.csv)
+ */
+export function downloadCSVTemplate(unit: 'mg/dL' | 'mmol/L' = 'mg/dL'): void {
+  const isMmol = unit === 'mmol/L';
+  const csvContent = [
+    'Date,Time,Blood Sugar,Unit,Reading Type,Meal Information,Notes,Comments',
+    `2026-11-15,07:30,${isMmol ? '5.2' : '94'},${unit},Fasting,,"Woke up well rested","Morning baseline"`,
+    `2026-11-15,09:30,${isMmol ? '6.8' : '122'},${unit},2 Hours After Meal,"Oatmeal with almonds & blueberries","Felt good energy","Post-breakfast check"`,
+    `2026-11-15,13:00,${isMmol ? '5.4' : '98'},${unit},Before Meal,"Pre-lunch",,`,
+    `2026-11-15,15:00,${isMmol ? '7.6' : '138'},${unit},2 Hours After Meal,"Grilled chicken salad with olive oil","Light 15 min walk after lunch",`,
+    `2026-11-15,22:15,${isMmol ? '5.8' : '105'},${unit},Random,,"Bedtime check","Normal day"`,
+  ].join('\r\n');
+
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `GlucoTrack_Import_Template_${unit.replace('/', '_')}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+

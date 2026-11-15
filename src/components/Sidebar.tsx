@@ -149,3 +149,4 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onMobileClose }) =
     </>
   );
 };
+

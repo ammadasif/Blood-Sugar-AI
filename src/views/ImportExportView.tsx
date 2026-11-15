@@ -15,7 +15,13 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { useBloodSugar } from '../context/BloodSugarContext';
-import { exportToExcel, parseExcelFile, ExcelImportResult } from '../services/excelService';
+import {
+  exportToExcel,
+  parseExcelFile,
+  downloadExcelTemplate,
+  downloadCSVTemplate,
+  ExcelImportResult,
+} from '../services/excelService';
 import { exportCSV, exportTXT, exportJSONBackup, parseJSONBackup } from '../services/backupService';
 import { ConfirmationModal } from '../components/ConfirmationModal';
 import { formatDate } from '../utils/conversions';
@@ -206,6 +212,40 @@ export const ImportExportView: React.FC = () => {
               <FileSpreadsheet className="w-4 h-4" />
               <span>Select Excel File</span>
             </label>
+          </div>
+
+          {/* Download Import Template Card */}
+          <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/80 dark:border-slate-800 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                  Import Template Files (.xlsx / .csv)
+                </h4>
+              </div>
+              <span className="text-[10px] text-slate-400 font-medium">Ready to fill</span>
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+              Download our pre-formatted template with sample entries and column guidelines. Fill in your data and upload it above.
+            </p>
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => downloadExcelTemplate(settings.unit)}
+                className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-emerald-300 dark:border-emerald-700/60 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-xs font-semibold shadow-sm transition flex items-center gap-1.5"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download Excel Template (.xlsx)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => downloadCSVTemplate(settings.unit)}
+                className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs font-semibold shadow-sm transition flex items-center gap-1.5"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download CSV Template (.csv)</span>
+              </button>
+            </div>
           </div>
 
           {excelError && (
@@ -534,3 +574,4 @@ export const ImportExportView: React.FC = () => {
     </div>
   );
 };
+

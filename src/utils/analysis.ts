@@ -246,3 +246,4 @@ export function calculateVariability(valuesMgDl: number[]): { sd: number; cv: nu
     cv: Number(cv.toFixed(1)),
   };
 }
+

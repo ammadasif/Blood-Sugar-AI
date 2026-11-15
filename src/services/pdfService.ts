@@ -211,3 +211,4 @@ export function generatePDFReport(
   const filename = `GlucoTrack_Report_${summary.periodLabel.replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
   doc.save(filename);
 }
+

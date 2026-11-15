@@ -475,3 +475,4 @@ export const AddReadingView: React.FC = () => {
     </div>
   );
 };
+

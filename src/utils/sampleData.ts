@@ -102,3 +102,4 @@ export function generateSampleReadings(): BloodSugarReading[] {
   // Sort descending by date and time
   return readings.sort((a, b) => `${b.date}T${b.time}`.localeCompare(`${a.date}T${a.time}`));
 }
+

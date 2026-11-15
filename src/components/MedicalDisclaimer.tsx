@@ -57,3 +57,4 @@ export const MedicalDisclaimer: React.FC<MedicalDisclaimerProps> = ({ compact = 
     </div>
   );
 };
+

@@ -99,3 +99,4 @@ export interface PeriodSummary {
   variabilitySD?: number;
   variabilityCV?: number;
 }
+
