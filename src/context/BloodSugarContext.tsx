@@ -195,15 +195,24 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           }
         }
 
-        // Check URL hash for offline direct transfer: #transfer=...
-        if (window.location.hash.includes('transfer=')) {
-          const transferred = cloudSyncService.decodeTransferHash(window.location.hash);
-          if (transferred && transferred.length > 0) {
-            await dbService.bulkAddReadings(transferred);
-            await reloadData();
-            setSyncNotice(`Directly imported ${transferred.length} readings from transfer link!`);
-            window.history.replaceState({}, document.title, window.location.pathname);
-            return;
+        // Check URL for QR Code import: ?import=COMPRESSED_DATA
+        const importParam = urlParams.get('import');
+        if (importParam) {
+          try {
+            setSyncNotice('QR Code se data import ho raha hai...');
+            const importedReadings = await cloudSyncService.decodeImportParam(importParam);
+            if (importedReadings && importedReadings.length > 0) {
+              const currentLocal = await dbService.getAllReadings();
+              const { merged, newCount } = cloudSyncService.mergeReadings(currentLocal, importedReadings);
+              await dbService.clearAllReadings();
+              await dbService.bulkAddReadings(merged);
+              await reloadData();
+              setSyncNotice(`✅ QR Code se ${newCount} nayi readings import ho gayi! Total: ${merged.length}`);
+              window.history.replaceState({}, document.title, window.location.pathname);
+              return;
+            }
+          } catch (e) {
+            console.warn('QR import failed:', e);
           }
         }
 

@@ -18,25 +18,176 @@ export interface SyncResult {
   message: string;
   readingsCount?: number;
   updatedAt?: number;
+  error?: string;
 }
 
-const PRIMARY_SYNC_BUCKET = 'glucotrack_cross_device_sync_v1';
-const KVDB_BASE = `https://kvdb.io/${PRIMARY_SYNC_BUCKET}`;
-
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPRESSION HELPERS — Browser native CompressionStream API
+// No external library needed. Works in Chrome 80+, Safari 16.4+, Firefox 113+
+// ─────────────────────────────────────────────────────────────────────────────
 class CloudSyncService {
-  /**
-   * Sanitizes username to alphanumeric string (lowercase)
-   */
+
+  // ───────────────────────────────────────────────
   public sanitizeUsername(username: string): string {
-    return (username || '')
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]/g, '');
+    return (username || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
   }
 
-  /**
-   * Pushes current local dataset to the cloud under this username
-   */
+  // ───────────────────────────────────────────────
+  // COMPRESS string → base64url (deflate-raw)
+  // ───────────────────────────────────────────────
+  private async compress(str: string): Promise<string> {
+    try {
+      const stream = new (window as any).CompressionStream('deflate-raw');
+      const writer = stream.writable.getWriter();
+      writer.write(new TextEncoder().encode(str));
+      writer.close();
+
+      const chunks: Uint8Array[] = [];
+      const reader = stream.readable.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+      const total = chunks.reduce((n, c) => n + c.length, 0);
+      const buf = new Uint8Array(total);
+      let off = 0;
+      for (const c of chunks) { buf.set(c, off); off += c.length; }
+
+      // base64url (no +, /, =)
+      return btoa(String.fromCharCode(...buf))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    } catch {
+      // Fallback: plain base64
+      return btoa(encodeURIComponent(str)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    }
+  }
+
+  // ───────────────────────────────────────────────
+  // DECOMPRESS base64url → string
+  // ───────────────────────────────────────────────
+  public async decompress(b64url: string): Promise<string> {
+    try {
+      const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+      const pad = b64.length % 4;
+      const padded = pad ? b64 + '='.repeat(4 - pad) : b64;
+
+      const bytes = Uint8Array.from(atob(padded), c => c.charCodeAt(0));
+
+      const stream = new (window as any).DecompressionStream('deflate-raw');
+      const writer = stream.writable.getWriter();
+      writer.write(bytes);
+      writer.close();
+
+      const chunks: Uint8Array[] = [];
+      const reader = stream.readable.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+      const total = chunks.reduce((n, c) => n + c.length, 0);
+      const buf = new Uint8Array(total);
+      let off = 0;
+      for (const c of chunks) { buf.set(c, off); off += c.length; }
+      return new TextDecoder().decode(buf);
+    } catch {
+      // Fallback: plain base64
+      try {
+        const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+        const pad = b64.length % 4;
+        const padded = pad ? b64 + '='.repeat(4 - pad) : b64;
+        return decodeURIComponent(atob(padded));
+      } catch {
+        return '';
+      }
+    }
+  }
+
+  // ───────────────────────────────────────────────
+  // GENERATE QR TRANSFER URL
+  // Readings → compressed → base64url → ?import=... URL
+  // QR code for this URL lets mobile import in one scan
+  // ───────────────────────────────────────────────
+  public async generateQRTransferUrl(readings: BloodSugarReading[]): Promise<string> {
+    const base = `${window.location.origin}${window.location.pathname}`.replace(/\/+$/, '');
+
+    // Minimal payload: only essential fields to keep size small
+    const minimal = readings.map(r => ({
+      d: r.date,
+      t: r.time,
+      v: r.value,
+      y: r.type,
+      u: r.unitAtEntry || 'mg/dL',
+      m: r.mealInfo || '',
+      n: r.notes || '',
+      i: r.id,
+    }));
+
+    const json = JSON.stringify(minimal);
+    const compressed = await this.compress(json);
+    return `${base}/?import=${compressed}`;
+  }
+
+  // ───────────────────────────────────────────────
+  // DECODE IMPORT URL DATA
+  // Called when app opens with ?import=... param
+  // ───────────────────────────────────────────────
+  public async decodeImportParam(importParam: string): Promise<BloodSugarReading[] | null> {
+    try {
+      const json = await this.decompress(importParam);
+      const parsed = JSON.parse(json);
+      if (!Array.isArray(parsed)) return null;
+
+      return parsed.map((item: any, idx: number) => ({
+        id: item.i || `import_${item.d}_${(item.t || '').replace(':', '')}_${idx}`,
+        date: item.d,
+        time: item.t,
+        value: Number(item.v),
+        unitAtEntry: item.u || 'mg/dL',
+        type: item.y || 'fasting',
+        mealInfo: item.m || undefined,
+        notes: item.n || undefined,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }));
+    } catch (e) {
+      console.warn('[CloudSync] Failed to decode import param:', e);
+      return null;
+    }
+  }
+
+  // ───────────────────────────────────────────────
+  // QR CODE IMAGE URL (uses free qrserver.com API)
+  // ───────────────────────────────────────────────
+  public getQRCodeImageUrl(dataUrl: string, size = 240): string {
+    const encoded = encodeURIComponent(dataUrl);
+    return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encoded}&ecc=M&margin=1`;
+  }
+
+  // ───────────────────────────────────────────────
+  // LOCAL CACHE (keeps working offline)
+  // ───────────────────────────────────────────────
+  private saveToCache(cleanUser: string, payload: CloudSyncPayload) {
+    try {
+      localStorage.setItem(`glucotrack_cache_${cleanUser}`, JSON.stringify(payload));
+    } catch { /* storage full */ }
+  }
+
+  public loadFromCache(cleanUser: string): CloudSyncPayload | null {
+    try {
+      const raw = localStorage.getItem(`glucotrack_cache_${cleanUser}`);
+      if (!raw) return null;
+      const data = JSON.parse(raw) as CloudSyncPayload;
+      return data && Array.isArray(data.readings) ? data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // ───────────────────────────────────────────────
+  // PUSH — Save to localStorage cache (primary local sync)
+  // ───────────────────────────────────────────────
   public async pushToCloud(
     username: string,
     readings: BloodSugarReading[],
@@ -44,12 +195,12 @@ class CloudSyncService {
   ): Promise<SyncResult> {
     const cleanUser = this.sanitizeUsername(username);
     if (!cleanUser || cleanUser.length < 2) {
-      return { success: false, message: 'Username must be at least 2 characters.' };
+      return { success: false, message: 'Username kam az kam 2 characters ka hona chahiye.' };
     }
 
     const payload: CloudSyncPayload = {
       username: cleanUser,
-      version: 1,
+      version: 3,
       updatedAt: Date.now(),
       deviceInfo: navigator.userAgent.includes('Mobile') ? 'Mobile' : 'Desktop',
       readings,
@@ -60,265 +211,85 @@ class CloudSyncService {
       },
     };
 
-    const jsonStr = JSON.stringify(payload);
+    // Save to localStorage cache
+    this.saveToCache(cleanUser, payload);
 
-    // Also cache locally for offline redundancy
-    try {
-      localStorage.setItem(`glucotrack_cache_${cleanUser}`, jsonStr);
-    } catch {
-      // Local storage full
-    }
-
-    try {
-      // If custom sync URL is provided (e.g. Firebase RTDB)
-      if (settings.customSyncUrl && settings.customSyncUrl.startsWith('http')) {
-        const cleanBase = settings.customSyncUrl.replace(/\/+$/, '');
-        const targetUrl = cleanBase.includes('.firebaseio.com')
-          ? `${cleanBase}/users/${cleanUser}.json`
-          : `${cleanBase}/${cleanUser}`;
-
-        const res = await fetch(targetUrl, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: jsonStr,
-        });
-
-        if (res.ok) {
-          return {
-            success: true,
-            message: `Successfully synced ${readings.length} readings to custom cloud!`,
-            readingsCount: readings.length,
-            updatedAt: payload.updatedAt,
-          };
-        }
-      }
-
-      // Default Free Cloud Key-Value Store (kvdb.io)
-      const res = await fetch(`${KVDB_BASE}/${cleanUser}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: jsonStr,
-      });
-
-      if (res.ok) {
-        return {
-          success: true,
-          message: `Synced ${readings.length} readings to cloud for '${cleanUser}'.`,
-          readingsCount: readings.length,
-          updatedAt: payload.updatedAt,
-        };
-      } else {
-        // If kvdb status is not ok, attempt fallback
-        return {
-          success: true,
-          message: `Saved locally. Ready for device sync under '${cleanUser}'.`,
-          readingsCount: readings.length,
-          updatedAt: payload.updatedAt,
-        };
-      }
-    } catch (err: any) {
-      console.warn('Network sync notice:', err?.message || err);
-      return {
-        success: true,
-        message: `Saved to device sync profile '${cleanUser}'.`,
-        readingsCount: readings.length,
-        updatedAt: payload.updatedAt,
-      };
-    }
+    return {
+      success: true,
+      message: `✅ ${readings.length} readings locally saved under username '${cleanUser}'.\n📱 Ab QR Code se Mobile par transfer karein.`,
+      readingsCount: readings.length,
+      updatedAt: payload.updatedAt,
+    };
   }
 
-  /**
-   * Pulls remote dataset from the cloud for this username
-   */
+  // ───────────────────────────────────────────────
+  // PULL — Load from localStorage cache
+  // ───────────────────────────────────────────────
   public async pullFromCloud(
     username: string,
-    settings?: AppSettings
-  ): Promise<{
-    success: boolean;
-    message: string;
-    payload?: CloudSyncPayload;
-  }> {
+    _settings?: AppSettings
+  ): Promise<{ success: boolean; message: string; payload?: CloudSyncPayload }> {
     const cleanUser = this.sanitizeUsername(username);
     if (!cleanUser || cleanUser.length < 2) {
       return { success: false, message: 'Invalid username.' };
     }
 
-    try {
-      // 1. Check custom sync URL if configured
-      if (settings?.customSyncUrl && settings.customSyncUrl.startsWith('http')) {
-        const cleanBase = settings.customSyncUrl.replace(/\/+$/, '');
-        const targetUrl = cleanBase.includes('.firebaseio.com')
-          ? `${cleanBase}/users/${cleanUser}.json`
-          : `${cleanBase}/${cleanUser}`;
-
-        const res = await fetch(targetUrl);
-        if (res.ok) {
-          const data = (await res.json()) as CloudSyncPayload;
-          if (data && Array.isArray(data.readings)) {
-            return {
-              success: true,
-              message: `Retrieved ${data.readings.length} readings from custom cloud!`,
-              payload: data,
-            };
-          }
-        }
-      }
-
-      // 2. Check Primary Cloud Key-Value Store
-      const res = await fetch(`${KVDB_BASE}/${cleanUser}`);
-      if (res.ok) {
-        const data = (await res.json()) as CloudSyncPayload;
-        if (data && Array.isArray(data.readings)) {
-          return {
-            success: true,
-            message: `Retrieved ${data.readings.length} readings from cloud for '${cleanUser}'!`,
-            payload: data,
-          };
-        }
-      }
-
-      // 3. Check local cache fallback
-      const cached = localStorage.getItem(`glucotrack_cache_${cleanUser}`);
-      if (cached) {
-        const data = JSON.parse(cached) as CloudSyncPayload;
-        if (data && Array.isArray(data.readings)) {
-          return {
-            success: true,
-            message: `Retrieved ${data.readings.length} cached readings for '${cleanUser}'.`,
-            payload: data,
-          };
-        }
-      }
-
+    const cached = this.loadFromCache(cleanUser);
+    if (cached && cached.readings.length > 0) {
       return {
-        success: false,
-        message: `No existing cloud records found for username '${cleanUser}'. Upload from another device first.`,
-      };
-    } catch (err: any) {
-      // Fallback to local cache if offline
-      const cached = localStorage.getItem(`glucotrack_cache_${cleanUser}`);
-      if (cached) {
-        try {
-          const data = JSON.parse(cached) as CloudSyncPayload;
-          return {
-            success: true,
-            message: `Loaded ${data.readings.length} offline cached readings for '${cleanUser}'.`,
-            payload: data,
-          };
-        } catch {}
-      }
-      return {
-        success: false,
-        message: `Unable to connect to cloud sync: ${err?.message || 'Network error'}.`,
+        success: true,
+        message: `✅ ${cached.readings.length} readings mill gayi username '${cleanUser}' ke liye.`,
+        payload: cached,
       };
     }
+
+    return {
+      success: false,
+      message: `❌ Is device par username '${cleanUser}' ka koi data nahi mila.\n\n📱 Dusre device se QR Code scan karein, ya wahan se Push karke yahan Pull karein.`,
+    };
   }
 
-  /**
-   * Merges local and cloud readings, deduplicating by ID and (date + time + type + value)
-   */
+  // ───────────────────────────────────────────────
+  // MERGE — Combine local + imported readings
+  // ───────────────────────────────────────────────
   public mergeReadings(
     localReadings: BloodSugarReading[],
     cloudReadings: BloodSugarReading[]
   ): { merged: BloodSugarReading[]; newCount: number } {
     const existingMap = new Map<string, BloodSugarReading>();
     const fingerprintSet = new Set<string>();
+    const fp = (r: BloodSugarReading) => `${r.date}_${r.time}_${r.type}_${r.value}`;
 
-    const getFingerprint = (r: BloodSugarReading) => `${r.date}_${r.time}_${r.type}_${r.value}`;
-
-    // Index local readings
-    localReadings.forEach((r) => {
+    localReadings.forEach(r => {
       existingMap.set(r.id, r);
-      fingerprintSet.add(getFingerprint(r));
+      fingerprintSet.add(fp(r));
     });
 
     let newCount = 0;
-
-    // Merge cloud readings
-    cloudReadings.forEach((cr) => {
-      const fp = getFingerprint(cr);
-      if (!existingMap.has(cr.id) && !fingerprintSet.has(fp)) {
+    cloudReadings.forEach(cr => {
+      if (!existingMap.has(cr.id) && !fingerprintSet.has(fp(cr))) {
         existingMap.set(cr.id, cr);
-        fingerprintSet.add(fp);
+        fingerprintSet.add(fp(cr));
         newCount++;
       } else if (existingMap.has(cr.id)) {
-        // Keep the one with newer updatedAt
         const local = existingMap.get(cr.id)!;
-        if ((cr.updatedAt || 0) > (local.updatedAt || 0)) {
-          existingMap.set(cr.id, cr);
-        }
+        if ((cr.updatedAt || 0) > (local.updatedAt || 0)) existingMap.set(cr.id, cr);
       }
     });
 
-    const merged = Array.from(existingMap.values()).sort((a, b) => {
-      return `${b.date}T${b.time}`.localeCompare(`${a.date}T${a.time}`);
-    });
-
+    const merged = Array.from(existingMap.values()).sort((a, b) =>
+      `${b.date}T${b.time}`.localeCompare(`${a.date}T${a.time}`)
+    );
     return { merged, newCount };
   }
 
-  /**
-   * Generates a 1-click Mobile Sync Link
-   * When opened on a mobile device, it auto-connects to this username and loads the data!
-   */
+  // ───────────────────────────────────────────────
+  // MOBILE SYNC URL (?user=...)
+  // ───────────────────────────────────────────────
   public generateMobileSyncUrl(username: string): string {
-    const cleanUser = this.sanitizeUsername(username);
-    const baseUrl = `${window.location.origin}${window.location.pathname}`.replace(/\/+$/, '');
-    return `${baseUrl}/?user=${encodeURIComponent(cleanUser)}`;
-  }
-
-  /**
-   * Generates an instant offline transfer link containing data in URL hash
-   */
-  public generateDirectTransferUrl(readings: BloodSugarReading[]): string {
-    const baseUrl = `${window.location.origin}${window.location.pathname}`.replace(/\/+$/, '');
-    try {
-      // Compress small subset or full payload
-      const simple = readings.map((r) => ({
-        d: r.date,
-        t: r.time,
-        v: r.value,
-        u: r.unitAtEntry,
-        y: r.type,
-        m: r.mealInfo,
-        n: r.notes,
-      }));
-      const encoded = btoa(encodeURIComponent(JSON.stringify(simple)));
-      return `${baseUrl}/#transfer=${encoded}`;
-    } catch {
-      return baseUrl;
-    }
-  }
-
-  /**
-   * Decodes an offline transfer URL hash if present
-   */
-  public decodeTransferHash(hash: string): BloodSugarReading[] | null {
-    try {
-      if (!hash.includes('transfer=')) return null;
-      const b64 = hash.split('transfer=')[1].split('&')[0];
-      const json = decodeURIComponent(atob(b64));
-      const parsed = JSON.parse(json);
-      if (!Array.isArray(parsed)) return null;
-
-      return parsed.map((item: any, idx: number) => ({
-        id: `transfer_${item.d}_${item.t.replace(':', '')}_${idx}`,
-        date: item.d,
-        time: item.t,
-        value: item.v,
-        unitAtEntry: item.u || 'mg/dL',
-        type: item.y || 'fasting',
-        mealInfo: item.m,
-        notes: item.n,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      }));
-    } catch (err) {
-      console.warn('Failed to decode transfer hash:', err);
-      return null;
-    }
+    const clean = this.sanitizeUsername(username);
+    const base = `${window.location.origin}${window.location.pathname}`.replace(/\/+$/, '');
+    return `${base}/?user=${encodeURIComponent(clean)}`;
   }
 }
 
