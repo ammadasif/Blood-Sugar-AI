@@ -10,6 +10,11 @@ import {
   Activity,
   AlertTriangle,
   Sparkles,
+  Cloud,
+  Smartphone,
+  Copy,
+  Check,
+  RefreshCw,
 } from 'lucide-react';
 import { useBloodSugar } from '../context/BloodSugarContext';
 import { BloodSugarUnit, TargetProfile, TargetRangeConfig } from '../types';
@@ -17,15 +22,52 @@ import { DEFAULT_RANGES, DIABETES_MANAGEMENT_RANGES, TIGHT_TARGET_RANGES } from 
 import { convertFromInternal, convertToInternal, formatBloodSugar } from '../utils/conversions';
 import { ConfirmationModal } from '../components/ConfirmationModal';
 import { MedicalDisclaimer } from '../components/MedicalDisclaimer';
+import { cloudSyncService } from '../services/cloudSyncService';
 
 export const SettingsView: React.FC = () => {
-  const { settings, updateSettings, readings, loadSampleData } = useBloodSugar();
+  const { settings, updateSettings, readings, loadSampleData, syncWithCloud, isSyncing } = useBloodSugar();
 
   // Local form state
   const [unit, setUnit] = useState<BloodSugarUnit>(settings.unit);
   const [profile, setProfile] = useState<TargetProfile>(settings.targetProfile);
   const [storageLimit, setStorageLimit] = useState<number>(settings.storageLimit || 1000);
   const [autoDeleteOld, setAutoDeleteOld] = useState<boolean>(settings.autoDeleteOldReadings || false);
+
+  // Cloud Sync state
+  const [cloudUsername, setCloudUsername] = useState<string>(settings.username || '');
+  const [cloudCopied, setCloudCopied] = useState(false);
+  const [cloudMsg, setCloudMsg] = useState<{ text: string; ok: boolean } | null>(null);
+
+  const cleanCloudUser = cloudSyncService.sanitizeUsername(cloudUsername);
+  const mobileSyncUrl = cleanCloudUser ? cloudSyncService.generateMobileSyncUrl(cleanCloudUser) : '';
+
+  const handleSaveCloudUsername = () => {
+    if (!cleanCloudUser) {
+      setCloudMsg({ text: 'Username mein sirf letters, numbers, hyphen allowed hain.', ok: false });
+      return;
+    }
+    updateSettings({ username: cleanCloudUser, cloudSyncEnabled: true });
+    setCloudMsg({ text: `Username "${cleanCloudUser}" save ho gaya! Ab sync kar sakte hain.`, ok: true });
+  };
+
+  const handleCopyMobileUrl = () => {
+    if (!mobileSyncUrl) return;
+    navigator.clipboard.writeText(mobileSyncUrl).then(() => {
+      setCloudCopied(true);
+      setTimeout(() => setCloudCopied(false), 2500);
+    });
+  };
+
+  const handleCloudSync = async (mode: 'upload' | 'download' | 'merge') => {
+    if (!cleanCloudUser) {
+      setCloudMsg({ text: 'Pehle username save karein.', ok: false });
+      return;
+    }
+    updateSettings({ username: cleanCloudUser, cloudSyncEnabled: true });
+    setCloudMsg(null);
+    await syncWithCloud(mode);
+    setCloudMsg({ text: 'Sync complete!', ok: true });
+  };
 
   // Range inputs (stored in user unit for display/editing, converted to mg/dL upon save)
   const [lowThreshold, setLowThreshold] = useState<number>(
@@ -509,6 +551,138 @@ export const SettingsView: React.FC = () => {
           >
             Load 14-Day Sample History
           </button>
+        </div>
+
+        {/* ═══════════════════════════════════════════════════════
+            CLOUD SYNC / CROSS-DEVICE SECTION
+        ═══════════════════════════════════════════════════════ */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-6 shadow-sm space-y-5">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 rounded-2xl">
+              <Cloud className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="text-xs font-bold text-slate-900 dark:text-white">Cross-Device Cloud Sync</h4>
+              <p className="text-[11px] text-slate-400">
+                Laptop aur Mobile par ek hi data dekhein — username se sync hoga
+              </p>
+            </div>
+            {settings.cloudSyncEnabled && settings.username && (
+              <span className="ml-auto text-[10px] font-semibold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 px-2.5 py-1 rounded-full flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                Active: @{settings.username}
+              </span>
+            )}
+          </div>
+
+          {/* Username Input */}
+          <div className="space-y-2">
+            <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
+              Your Sync Username
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={cloudUsername}
+                onChange={(e) => setCloudUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
+                placeholder="e.g. ammad123"
+                className="flex-1 px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <button
+                type="button"
+                onClick={handleSaveCloudUsername}
+                className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition"
+              >
+                Save
+              </button>
+            </div>
+            <p className="text-[10px] text-slate-400">
+              Sirf letters, numbers, hyphen (-) aur underscore (_) allowed • Case insensitive
+            </p>
+          </div>
+
+          {/* Mobile Sync URL */}
+          {mobileSyncUrl && (
+            <div className="space-y-2">
+              <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Smartphone className="w-3.5 h-3.5" />
+                Mobile Sync URL
+              </label>
+              <div className="flex items-center gap-2 p-3 bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
+                <span className="flex-1 text-[11px] font-mono text-blue-600 dark:text-blue-400 truncate">
+                  {mobileSyncUrl}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleCopyMobileUrl}
+                  className="shrink-0 p-1.5 rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 transition"
+                  title="Copy mobile URL"
+                >
+                  {cloudCopied ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-500" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5 text-slate-500" />
+                  )}
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-400">
+                Yeh URL Mobile par open karein — automatically aapka data sync ho jayega
+              </p>
+            </div>
+          )}
+
+          {/* Sync Buttons */}
+          {settings.username && (
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => handleCloudSync('upload')}
+                disabled={isSyncing}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50 disabled:opacity-50 transition"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                Push (Upload)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleCloudSync('download')}
+                disabled={isSyncing}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 disabled:opacity-50 transition"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                Pull (Download)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleCloudSync('merge')}
+                disabled={isSyncing}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 disabled:opacity-50 transition"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                Merge (Both)
+              </button>
+            </div>
+          )}
+
+          {/* Last Sync Info */}
+          {settings.lastSyncTimestamp && (
+            <p className="text-[10px] text-slate-400">
+              Last sync: {new Date(settings.lastSyncTimestamp).toLocaleString('en-PK')}
+            </p>
+          )}
+
+          {/* Feedback Message */}
+          {cloudMsg && (
+            <div
+              className={`text-xs font-medium px-3 py-2 rounded-xl ${
+                cloudMsg.ok
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                  : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300'
+              }`}
+            >
+              {cloudMsg.text}
+            </div>
+          )}
         </div>
 
         {/* Actions Bar */}

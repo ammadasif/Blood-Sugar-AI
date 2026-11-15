@@ -78,6 +78,10 @@ export interface AppSettings {
   theme: 'light' | 'dark';
   hasDismissedBackupWarning?: boolean;
   lastBackupDate?: string;
+  username?: string;
+  cloudSyncEnabled?: boolean;
+  lastSyncTimestamp?: number;
+  customSyncUrl?: string;
 }
 
 export interface ReadingFilter {
