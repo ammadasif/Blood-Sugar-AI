@@ -13,23 +13,36 @@ import {
   AlertTriangle,
   ArrowUpRight,
   ArrowDownRight,
+  Utensils,
+  Check,
+  Info,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
   BarChart,
   Bar,
+  LineChart,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
+  ReferenceLine,
+  Cell,
 } from 'recharts';
 import { useBloodSugar } from '../context/BloodSugarContext';
-import { calculateEstimatedA1c, calculateVariability } from '../utils/analysis';
+import {
+  calculateEstimatedA1c,
+  calculateVariability,
+  analyzeReading,
+  READING_TYPE_LABELS,
+} from '../utils/analysis';
 import {
   convertFromInternal,
   formatBloodSugar,
   formatDate,
   formatDateDMY,
+  formatTime,
 } from '../utils/conversions';
 import { MedicalDisclaimer } from '../components/MedicalDisclaimer';
 
@@ -87,6 +100,13 @@ export const AnalyticsView: React.FC = () => {
     });
   }, [readings, dateFilter, customStart, customEnd]);
 
+  // Sort chronological
+  const chronologicalReadings = useMemo(() => {
+    return [...filteredReadings].sort((a, b) =>
+      `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`)
+    );
+  }, [filteredReadings]);
+
   // All glucose readings values in mg/dL for the filtered period
   const valuesMgDl = useMemo(() => filteredReadings.map((r) => r.value), [filteredReadings]);
 
@@ -103,80 +123,203 @@ export const AnalyticsView: React.FC = () => {
   const variability = useMemo(() => calculateVariability(valuesMgDl), [valuesMgDl]);
 
   // Highest and Lowest readings in the filtered period
-  const { highestReading, lowestReading } = useMemo(() => {
-    if (filteredReadings.length === 0) return { highestReading: null, lowestReading: null };
-    const sorted = [...filteredReadings].sort((a, b) => b.value - a.value);
+  const { highestReading, lowestReading, latestReading } = useMemo(() => {
+    if (filteredReadings.length === 0) {
+      return { highestReading: null, lowestReading: null, latestReading: null };
+    }
+    const sortedByVal = [...filteredReadings].sort((a, b) => b.value - a.value);
+    const sortedByTime = [...filteredReadings].sort((a, b) =>
+      `${b.date}T${b.time}`.localeCompare(`${a.date}T${a.time}`)
+    );
     return {
-      highestReading: sorted[0],
-      lowestReading: sorted[sorted.length - 1],
+      highestReading: sortedByVal[0],
+      lowestReading: sortedByVal[sortedByVal.length - 1],
+      latestReading: sortedByTime[0],
     };
   }, [filteredReadings]);
 
-  // Time in Range (TIR) metrics based on international consensus
-  const timeInRangeStats = useMemo(() => {
+  // LIVE STATUS BREAKDOWN ACCORDING TO USER'S CONFIGURABLE CLINICAL REFERENCE RANGES
+  const statusStats = useMemo(() => {
     if (filteredReadings.length === 0) {
-      return { veryLow: 0, low: 0, inRange: 0, high: 0, veryHigh: 0, total: 0 };
+      return {
+        normal: 0,
+        elevated: 0,
+        high: 0,
+        low: 0,
+        normalPct: 0,
+        elevatedPct: 0,
+        highPct: 0,
+        lowPct: 0,
+        total: 0,
+      };
     }
 
     const total = filteredReadings.length;
-    let veryLow = 0; // < 54 mg/dL
-    let low = 0; // 54 - 69 mg/dL
-    let inRange = 0; // 70 - 180 mg/dL (or custom)
-    let high = 0; // 181 - 250 mg/dL
-    let veryHigh = 0; // > 250 mg/dL
+    let normal = 0;
+    let elevated = 0;
+    let high = 0;
+    let low = 0;
 
     filteredReadings.forEach((r) => {
-      const v = r.value;
-      if (v < 54) veryLow++;
-      else if (v < 70) low++;
-      else if (v <= 180) inRange++;
-      else if (v <= 250) high++;
-      else veryHigh++;
+      const a = analyzeReading(r, settings);
+      if (a.status === 'normal') normal++;
+      else if (a.status === 'elevated') elevated++;
+      else if (a.status === 'high') high++;
+      else if (a.status === 'low') low++;
     });
 
     return {
-      veryLow: Math.round((veryLow / total) * 100),
-      low: Math.round((low / total) * 100),
-      inRange: Math.round((inRange / total) * 100),
-      high: Math.round((high / total) * 100),
-      veryHigh: Math.round((veryHigh / total) * 100),
+      normal,
+      elevated,
+      high,
+      low,
+      normalPct: Math.round((normal / total) * 100),
+      elevatedPct: Math.round((elevated / total) * 100),
+      highPct: Math.round((high / total) * 100),
+      lowPct: Math.round((low / total) * 100),
       total,
     };
-  }, [filteredReadings]);
+  }, [filteredReadings, settings]);
 
-  // Time of Day distribution (Morning, Afternoon, Evening, Night)
-  const timeOfDayData = useMemo(() => {
-    const bins: Record<string, number[]> = {
-      'Morning (06-12)': [],
-      'Afternoon (12-18)': [],
-      'Evening (18-22)': [],
-      'Night (22-06)': [],
+  // MEAL SLOT DETAILED BREAKDOWN (Fasting, Breakfast, Lunch, Dinner)
+  const mealSlotStats = useMemo(() => {
+    const fasting = filteredReadings.filter((r) => r.type === 'fasting');
+    const breakfast = filteredReadings.filter(
+      (r) =>
+        (r.type === '2h_after_meal' || r.type === '1h_after_meal') &&
+        (r.mealInfo?.toLowerCase().includes('breakfast') ||
+          r.notes?.toLowerCase().includes('breakfast') ||
+          r.time < '11:30')
+    );
+    const lunch = filteredReadings.filter(
+      (r) =>
+        (r.type === '2h_after_meal' || r.type === '1h_after_meal') &&
+        (r.mealInfo?.toLowerCase().includes('lunch') ||
+          r.notes?.toLowerCase().includes('lunch') ||
+          (r.time >= '11:30' && r.time < '17:00'))
+    );
+    const dinner = filteredReadings.filter(
+      (r) =>
+        (r.type === '2h_after_meal' || r.type === '1h_after_meal') &&
+        (r.mealInfo?.toLowerCase().includes('dinner') ||
+          r.notes?.toLowerCase().includes('dinner') ||
+          r.time >= '17:00')
+    );
+
+    const calcGroup = (group: typeof filteredReadings, targetLimit: number) => {
+      if (group.length === 0) {
+        return { count: 0, avg: 0, min: 0, max: 0, inTargetCount: 0, inTargetPct: 0, elevatedCount: 0 };
+      }
+      const vals = group.map((r) => r.value);
+      const avg = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+      const min = Math.min(...vals);
+      const max = Math.max(...vals);
+      let inTargetCount = 0;
+      group.forEach((r) => {
+        const a = analyzeReading(r, settings);
+        if (a.status === 'normal') inTargetCount++;
+      });
+      return {
+        count: group.length,
+        avg: convertFromInternal(avg, settings.unit),
+        min: convertFromInternal(min, settings.unit),
+        max: convertFromInternal(max, settings.unit),
+        inTargetCount,
+        inTargetPct: Math.round((inTargetCount / group.length) * 100),
+        elevatedCount: group.length - inTargetCount,
+      };
     };
 
-    filteredReadings.forEach((r) => {
-      const hour = parseInt(r.time.split(':')[0], 10);
-      if (hour >= 6 && hour < 12) bins['Morning (06-12)'].push(r.value);
-      else if (hour >= 12 && hour < 18) bins['Afternoon (12-18)'].push(r.value);
-      else if (hour >= 18 && hour < 22) bins['Evening (18-22)'].push(r.value);
-      else bins['Night (22-06)'].push(r.value);
+    const fastingLimit = convertFromInternal(settings.ranges.fasting.normalMax, settings.unit);
+    const postMealLimit = convertFromInternal(settings.ranges.afterMeal2h.normalMax, settings.unit);
+
+    return {
+      fasting: { ...calcGroup(fasting, fastingLimit), limit: fastingLimit, label: 'Fasting' },
+      breakfast: { ...calcGroup(breakfast, postMealLimit), limit: postMealLimit, label: '2h Breakfast' },
+      lunch: { ...calcGroup(lunch, postMealLimit), limit: postMealLimit, label: '2h Lunch' },
+      dinner: { ...calcGroup(dinner, postMealLimit), limit: postMealLimit, label: '2h Dinner' },
+    };
+  }, [filteredReadings, settings]);
+
+  // Chart 1: Meal Slots Bar Chart Data
+  const mealSlotsChartData = useMemo(() => {
+    return [
+      {
+        slot: 'Fasting',
+        average: mealSlotStats.fasting.avg,
+        count: mealSlotStats.fasting.count,
+        targetLimit: mealSlotStats.fasting.limit,
+        inTargetPct: mealSlotStats.fasting.inTargetPct,
+        fillColor: mealSlotStats.fasting.inTargetPct >= 70 ? '#10b981' : '#f59e0b',
+      },
+      {
+        slot: '2h Breakfast',
+        average: mealSlotStats.breakfast.avg,
+        count: mealSlotStats.breakfast.count,
+        targetLimit: mealSlotStats.breakfast.limit,
+        inTargetPct: mealSlotStats.breakfast.inTargetPct,
+        fillColor: mealSlotStats.breakfast.inTargetPct >= 70 ? '#3b82f6' : '#f59e0b',
+      },
+      {
+        slot: '2h Lunch',
+        average: mealSlotStats.lunch.avg,
+        count: mealSlotStats.lunch.count,
+        targetLimit: mealSlotStats.lunch.limit,
+        inTargetPct: mealSlotStats.lunch.inTargetPct,
+        fillColor: mealSlotStats.lunch.inTargetPct >= 70 ? '#6366f1' : '#f59e0b',
+      },
+      {
+        slot: '2h Dinner',
+        average: mealSlotStats.dinner.avg,
+        count: mealSlotStats.dinner.count,
+        targetLimit: mealSlotStats.dinner.limit,
+        inTargetPct: mealSlotStats.dinner.inTargetPct,
+        fillColor: mealSlotStats.dinner.inTargetPct >= 70 ? '#14b8a6' : '#f59e0b',
+      },
+    ].filter((s) => s.count > 0);
+  }, [mealSlotStats]);
+
+  // Chart 2: Daily Progression Line Chart (Day by Day)
+  const dailyTrendsChartData = useMemo(() => {
+    const dayMap: Record<string, { fasting: number[]; postMeal: number[] }> = {};
+
+    chronologicalReadings.forEach((r) => {
+      if (!dayMap[r.date]) {
+        dayMap[r.date] = { fasting: [], postMeal: [] };
+      }
+      if (r.type === 'fasting') {
+        dayMap[r.date].fasting.push(r.value);
+      } else {
+        dayMap[r.date].postMeal.push(r.value);
+      }
     });
 
-    return Object.entries(bins).map(([slot, values]) => {
-      const avg = values.length
-        ? convertFromInternal(
-            Math.round(values.reduce((s, v) => s + v, 0) / values.length),
-            settings.unit
-          )
-        : 0;
-      return {
-        slot,
-        average: avg,
-        count: values.length,
-      };
-    });
-  }, [filteredReadings, settings.unit]);
+    return Object.entries(dayMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, group]) => {
+        const fAvg = group.fasting.length
+          ? convertFromInternal(
+              Math.round(group.fasting.reduce((s, v) => s + v, 0) / group.fasting.length),
+              settings.unit
+            )
+          : null;
+        const pmAvg = group.postMeal.length
+          ? convertFromInternal(
+              Math.round(group.postMeal.reduce((s, v) => s + v, 0) / group.postMeal.length),
+              settings.unit
+            )
+          : null;
 
-  // Day of Week trends
+        return {
+          date: formatDateDMY(date),
+          rawDate: date,
+          Fasting: fAvg,
+          'Post-Meal': pmAvg,
+        };
+      });
+  }, [chronologicalReadings, settings.unit]);
+
+  // Chart 3: Day of Week trends
   const dayOfWeekData = useMemo(() => {
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const bins: Record<string, number[]> = {
@@ -212,6 +355,80 @@ export const AnalyticsView: React.FC = () => {
       };
     });
   }, [filteredReadings, settings.unit]);
+
+  // LIVE CLINICAL INSIGHTS COMMENTARY GENERATOR
+  const liveInsights = useMemo(() => {
+    if (filteredReadings.length === 0) return [];
+    const insights: { title: string; desc: string; type: 'success' | 'warning' | 'info' }[] = [];
+
+    // 1. Overall Target Range Compliance
+    if (statusStats.normalPct >= 70) {
+      insights.push({
+        title: 'Strong Target Compliance',
+        desc: `${statusStats.normalPct}% (${statusStats.normal} of ${statusStats.total}) of your blood sugar readings met clinical reference targets.`,
+        type: 'success',
+      });
+    } else {
+      insights.push({
+        title: 'Elevated Glycemic Burden',
+        desc: `${statusStats.elevatedPct + statusStats.highPct}% (${statusStats.elevated + statusStats.high} readings) exceeded target thresholds. Review meal carbohydrate intake and physical activity.`,
+        type: 'warning',
+      });
+    }
+
+    // 2. Fasting Analysis
+    if (mealSlotStats.fasting.count > 0) {
+      if (mealSlotStats.fasting.inTargetPct >= 75) {
+        insights.push({
+          title: 'Optimal Fasting Baseline',
+          desc: `Morning fasting average is ${mealSlotStats.fasting.avg} ${settings.unit} with ${mealSlotStats.fasting.inTargetPct}% within normal limits (target: < ${mealSlotStats.fasting.limit} ${settings.unit}).`,
+          type: 'success',
+        });
+      } else {
+        insights.push({
+          title: 'Fasting Glucose Elevation',
+          desc: `Fasting average is ${mealSlotStats.fasting.avg} ${settings.unit} (highest: ${mealSlotStats.fasting.max} ${settings.unit}). ${mealSlotStats.fasting.elevatedCount} fasting readings were above target.`,
+          type: 'warning',
+        });
+      }
+    }
+
+    // 3. Post-meal Spikes Detection
+    const highSpikes = filteredReadings.filter((r) => r.value >= 150);
+    if (highSpikes.length > 0) {
+      const spike = highSpikes.sort((a, b) => b.value - a.value)[0];
+      insights.push({
+        title: `Post-Prandial Peak Detected`,
+        desc: `Highest post-meal reading reached ${formatBloodSugar(spike.value, settings.unit)} on ${formatDateDMY(spike.date)} (${READING_TYPE_LABELS[spike.type]}${spike.mealInfo ? ` - ${spike.mealInfo}` : ''}).`,
+        type: 'warning',
+      });
+    } else {
+      insights.push({
+        title: 'No Severe Spikes',
+        desc: `All post-meal readings remained below 150 mg/dL across the monitored period.`,
+        type: 'success',
+      });
+    }
+
+    // 4. Variability
+    if (variability) {
+      if (variability.cv <= 36) {
+        insights.push({
+          title: 'Stable Glycemic Profile',
+          desc: `Coefficient of Variation (CV) is ${variability.cv}%, well within the stable threshold (≤ 36%), protecting vascular health.`,
+          type: 'info',
+        });
+      } else {
+        insights.push({
+          title: 'High Glycemic Fluctuation',
+          desc: `CV is ${variability.cv}% (target ≤ 36%), indicating notable swings between lows and highs.`,
+          type: 'warning',
+        });
+      }
+    }
+
+    return insights;
+  }, [filteredReadings, statusStats, mealSlotStats, settings, variability]);
 
   const handleFitToDataRange = () => {
     if (earliestDate && latestDate) {
@@ -353,7 +570,7 @@ export const AnalyticsView: React.FC = () => {
         <>
           {/* Hero Stats */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* Estimated A1c */}
+            {/* 1. Estimated HbA1c */}
             <div className="bg-gradient-to-br from-blue-600 to-indigo-700 text-white rounded-3xl p-5 shadow-lg shadow-blue-500/10 space-y-2 flex flex-col justify-between">
               <div className="flex items-center justify-between text-blue-100">
                 <span className="text-[11px] font-bold uppercase tracking-wider">Estimated HbA1c</span>
@@ -370,7 +587,7 @@ export const AnalyticsView: React.FC = () => {
               </p>
             </div>
 
-            {/* Glucose Variability */}
+            {/* 2. Glycemic Variability (CV) */}
             <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-5 shadow-sm space-y-2 flex flex-col justify-between">
               <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
                 <span className="text-[11px] font-bold uppercase tracking-wider">Glycemic Variability (CV)</span>
@@ -395,24 +612,38 @@ export const AnalyticsView: React.FC = () => {
               </p>
             </div>
 
-            {/* Time In Range (TIR) */}
+            {/* 3. In Target Range (TITR) — ACCORDING TO USER'S REAL DATA */}
             <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-5 shadow-sm space-y-2 flex flex-col justify-between">
               <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
-                <span className="text-[11px] font-bold uppercase tracking-wider">Time In Range (TIR)</span>
+                <span className="text-[11px] font-bold uppercase tracking-wider">In Target Range</span>
                 <Sparkles className="w-4 h-4 text-emerald-500" />
               </div>
               <div className="flex items-baseline gap-2">
-                <span className="text-3xl sm:text-4xl font-extrabold text-emerald-600 dark:text-emerald-400">
-                  {timeInRangeStats.inRange}%
+                <span
+                  className={`text-3xl sm:text-4xl font-extrabold ${
+                    statusStats.normalPct >= 70
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : 'text-amber-600 dark:text-amber-400'
+                  }`}
+                >
+                  {statusStats.normalPct}%
                 </span>
-                <span className="text-[11px] text-slate-400">Goal &gt; 70%</span>
+                <span className="text-[11px] text-slate-400">
+                  {statusStats.normal} of {statusStats.total} tests
+                </span>
               </div>
               <p className="text-[11px] text-slate-400 leading-tight">
-                Standard clinical target band (70–180 mg/dL).
+                {statusStats.elevated + statusStats.high > 0 ? (
+                  <span className="text-amber-600 dark:text-amber-400 font-medium">
+                    {statusStats.elevated + statusStats.high} readings ({statusStats.elevatedPct + statusStats.highPct}%) above target
+                  </span>
+                ) : (
+                  'All readings within configured limits.'
+                )}
               </p>
             </div>
 
-            {/* Range Extremes (Highest / Lowest) */}
+            {/* 4. Range Extremes (Highest / Lowest) */}
             <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-5 shadow-sm space-y-2 flex flex-col justify-between">
               <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
                 <span className="text-[11px] font-bold uppercase tracking-wider">Period Extremes</span>
@@ -431,7 +662,7 @@ export const AnalyticsView: React.FC = () => {
                   <div className="text-[10px] text-slate-400 flex items-center gap-0.5">
                     <ArrowUpRight className="w-3 h-3 text-rose-500" /> Highest
                   </div>
-                  <div className="text-xl font-bold text-slate-900 dark:text-white">
+                  <div className="text-xl font-bold text-rose-600 dark:text-rose-400">
                     {highestReading ? formatBloodSugar(highestReading.value, settings.unit) : '—'}
                   </div>
                 </div>
@@ -442,113 +673,264 @@ export const AnalyticsView: React.FC = () => {
             </div>
           </div>
 
-          {/* Time In Range Stacked Breakdown Bar */}
+          {/* DYNAMIC CLINICAL DISTRIBUTION BAR ACCORDING TO USER'S DATA */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4">
-            <div>
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                International Consensus Time in Range (TIR) Breakdown
-              </h3>
-              <p className="text-xs text-slate-400">Standardized clinical glycemic tiers</p>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-blue-500" />
+                  Clinical Target Range Distribution Breakdown
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Evaluated against your active clinical target profile ({settings.targetProfile.replace('_', ' ').toUpperCase()})
+                </p>
+              </div>
+              <span className="text-xs font-semibold text-slate-500 bg-slate-100 dark:bg-slate-800 px-3 py-1 rounded-full w-fit">
+                {statusStats.normalPct}% In Target
+              </span>
             </div>
 
-            {/* Multi-segment Bar */}
+            {/* Multi-segment Bar matching real data */}
             <div className="h-6 w-full rounded-xl overflow-hidden flex shadow-inner bg-slate-100 dark:bg-slate-800">
-              {timeInRangeStats.veryLow > 0 && (
+              {statusStats.lowPct > 0 && (
                 <div
-                  style={{ width: `${timeInRangeStats.veryLow}%` }}
-                  title={`Very Low (< 54 mg/dL): ${timeInRangeStats.veryLow}%`}
-                  className="bg-red-600 h-full transition-all"
-                />
-              )}
-              {timeInRangeStats.low > 0 && (
-                <div
-                  style={{ width: `${timeInRangeStats.low}%` }}
-                  title={`Low (54-69 mg/dL): ${timeInRangeStats.low}%`}
+                  style={{ width: `${statusStats.lowPct}%` }}
+                  title={`Low Glucose: ${statusStats.low} readings (${statusStats.lowPct}%)`}
                   className="bg-sky-500 h-full transition-all"
                 />
               )}
-              {timeInRangeStats.inRange > 0 && (
+              {statusStats.normalPct > 0 && (
                 <div
-                  style={{ width: `${timeInRangeStats.inRange}%` }}
-                  title={`In Range (70-180 mg/dL): ${timeInRangeStats.inRange}%`}
+                  style={{ width: `${statusStats.normalPct}%` }}
+                  title={`Within Target: ${statusStats.normal} readings (${statusStats.normalPct}%)`}
                   className="bg-emerald-500 h-full transition-all"
                 />
               )}
-              {timeInRangeStats.high > 0 && (
+              {statusStats.elevatedPct > 0 && (
                 <div
-                  style={{ width: `${timeInRangeStats.high}%` }}
-                  title={`High (181-250 mg/dL): ${timeInRangeStats.high}%`}
+                  style={{ width: `${statusStats.elevatedPct}%` }}
+                  title={`Elevated: ${statusStats.elevated} readings (${statusStats.elevatedPct}%)`}
                   className="bg-amber-500 h-full transition-all"
                 />
               )}
-              {timeInRangeStats.veryHigh > 0 && (
+              {statusStats.highPct > 0 && (
                 <div
-                  style={{ width: `${timeInRangeStats.veryHigh}%` }}
-                  title={`Very High (> 250 mg/dL): ${timeInRangeStats.veryHigh}%`}
-                  className="bg-rose-700 h-full transition-all"
+                  style={{ width: `${statusStats.highPct}%` }}
+                  title={`High/Screening: ${statusStats.high} readings (${statusStats.highPct}%)`}
+                  className="bg-rose-600 h-full transition-all"
                 />
               )}
             </div>
 
-            {/* Legend */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-2 text-xs">
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-md bg-red-600 shrink-0" />
+            {/* Dynamic Legend with exact counts & percentages */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 text-xs">
+              <div className="p-2.5 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-800/60 flex items-center gap-3">
+                <span className="w-3.5 h-3.5 rounded-md bg-emerald-500 shrink-0" />
                 <div>
-                  <p className="font-bold text-slate-800 dark:text-slate-200">{timeInRangeStats.veryLow}%</p>
-                  <p className="text-[10px] text-slate-400">Very Low (&lt;54)</p>
+                  <p className="font-extrabold text-emerald-800 dark:text-emerald-200">
+                    {statusStats.normalPct}% ({statusStats.normal})
+                  </p>
+                  <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">Within Target</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-md bg-sky-500 shrink-0" />
+
+              <div className="p-2.5 rounded-xl bg-amber-50/80 dark:bg-amber-950/40 border border-amber-100 dark:border-amber-800/60 flex items-center gap-3">
+                <span className="w-3.5 h-3.5 rounded-md bg-amber-500 shrink-0" />
                 <div>
-                  <p className="font-bold text-slate-800 dark:text-slate-200">{timeInRangeStats.low}%</p>
-                  <p className="text-[10px] text-slate-400">Low (54–69)</p>
+                  <p className="font-extrabold text-amber-800 dark:text-amber-200">
+                    {statusStats.elevatedPct}% ({statusStats.elevated})
+                  </p>
+                  <p className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">Elevated / Attention</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-md bg-emerald-500 shrink-0" />
+
+              <div className="p-2.5 rounded-xl bg-rose-50/80 dark:bg-rose-950/40 border border-rose-100 dark:border-rose-800/60 flex items-center gap-3">
+                <span className="w-3.5 h-3.5 rounded-md bg-rose-600 shrink-0" />
                 <div>
-                  <p className="font-bold text-slate-800 dark:text-slate-200">{timeInRangeStats.inRange}%</p>
-                  <p className="text-[10px] text-slate-400">In Range (70–180)</p>
+                  <p className="font-extrabold text-rose-800 dark:text-rose-200">
+                    {statusStats.highPct}% ({statusStats.high})
+                  </p>
+                  <p className="text-[10px] text-rose-600 dark:text-rose-400 font-medium">High / Screening Tier</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-md bg-amber-500 shrink-0" />
+
+              <div className="p-2.5 rounded-xl bg-sky-50/80 dark:bg-sky-950/40 border border-sky-100 dark:border-sky-800/60 flex items-center gap-3">
+                <span className="w-3.5 h-3.5 rounded-md bg-sky-500 shrink-0" />
                 <div>
-                  <p className="font-bold text-slate-800 dark:text-slate-200">{timeInRangeStats.high}%</p>
-                  <p className="text-[10px] text-slate-400">High (181–250)</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-md bg-rose-700 shrink-0" />
-                <div>
-                  <p className="font-bold text-slate-800 dark:text-slate-200">{timeInRangeStats.veryHigh}%</p>
-                  <p className="text-[10px] text-slate-400">Very High (&gt;250)</p>
+                  <p className="font-extrabold text-sky-800 dark:text-sky-200">
+                    {statusStats.lowPct}% ({statusStats.low})
+                  </p>
+                  <p className="text-[10px] text-sky-600 dark:text-sky-400 font-medium">Low Glucose (&lt;70)</p>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Hourly / Day-of-Week Distribution Charts */}
+          {/* MEAL SLOT GLYCEMIC CARDS (FASTING, BREAKFAST, LUNCH, DINNER) */}
+          <div className="space-y-3">
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Utensils className="w-4 h-4 text-emerald-600" />
+              Meal Slot Glycemic Analysis ({settings.unit})
+            </h3>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* Fasting Card */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl p-4 shadow-sm space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-900 dark:text-white">Morning Fasting</span>
+                  <span className="text-[10px] text-slate-400">Target &lt; {mealSlotStats.fasting.limit}</span>
+                </div>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-2xl font-extrabold text-emerald-600 dark:text-emerald-400">
+                    {mealSlotStats.fasting.count > 0 ? `${mealSlotStats.fasting.avg}` : '—'}
+                  </span>
+                  <span className="text-xs text-slate-400">avg across {mealSlotStats.fasting.count} tests</span>
+                </div>
+                <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] flex items-center justify-between text-slate-500">
+                  <span>Range: {mealSlotStats.fasting.min} - {mealSlotStats.fasting.max}</span>
+                  <span
+                    className={`font-bold ${
+                      mealSlotStats.fasting.inTargetPct >= 70 ? 'text-emerald-600' : 'text-amber-600'
+                    }`}
+                  >
+                    {mealSlotStats.fasting.inTargetPct}% In Target
+                  </span>
+                </div>
+              </div>
+
+              {/* Breakfast Card */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl p-4 shadow-sm space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-900 dark:text-white">2h Post-Breakfast</span>
+                  <span className="text-[10px] text-slate-400">Target &lt; {mealSlotStats.breakfast.limit}</span>
+                </div>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-2xl font-extrabold text-blue-600 dark:text-blue-400">
+                    {mealSlotStats.breakfast.count > 0 ? `${mealSlotStats.breakfast.avg}` : '—'}
+                  </span>
+                  <span className="text-xs text-slate-400">avg across {mealSlotStats.breakfast.count} tests</span>
+                </div>
+                <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] flex items-center justify-between text-slate-500">
+                  <span>Range: {mealSlotStats.breakfast.min} - {mealSlotStats.breakfast.max}</span>
+                  <span
+                    className={`font-bold ${
+                      mealSlotStats.breakfast.inTargetPct >= 70 ? 'text-emerald-600' : 'text-amber-600'
+                    }`}
+                  >
+                    {mealSlotStats.breakfast.inTargetPct}% In Target
+                  </span>
+                </div>
+              </div>
+
+              {/* Lunch Card */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl p-4 shadow-sm space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-900 dark:text-white">2h Post-Lunch</span>
+                  <span className="text-[10px] text-slate-400">Target &lt; {mealSlotStats.lunch.limit}</span>
+                </div>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-2xl font-extrabold text-indigo-600 dark:text-indigo-400">
+                    {mealSlotStats.lunch.count > 0 ? `${mealSlotStats.lunch.avg}` : '—'}
+                  </span>
+                  <span className="text-xs text-slate-400">avg across {mealSlotStats.lunch.count} tests</span>
+                </div>
+                <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] flex items-center justify-between text-slate-500">
+                  <span>Range: {mealSlotStats.lunch.min} - {mealSlotStats.lunch.max}</span>
+                  <span
+                    className={`font-bold ${
+                      mealSlotStats.lunch.inTargetPct >= 70 ? 'text-emerald-600' : 'text-amber-600'
+                    }`}
+                  >
+                    {mealSlotStats.lunch.inTargetPct}% In Target
+                  </span>
+                </div>
+              </div>
+
+              {/* Dinner Card */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl p-4 shadow-sm space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-900 dark:text-white">2h Post-Dinner</span>
+                  <span className="text-[10px] text-slate-400">Target &lt; {mealSlotStats.dinner.limit}</span>
+                </div>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-2xl font-extrabold text-teal-600 dark:text-teal-400">
+                    {mealSlotStats.dinner.count > 0 ? `${mealSlotStats.dinner.avg}` : '—'}
+                  </span>
+                  <span className="text-xs text-slate-400">avg across {mealSlotStats.dinner.count} tests</span>
+                </div>
+                <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] flex items-center justify-between text-slate-500">
+                  <span>Range: {mealSlotStats.dinner.min} - {mealSlotStats.dinner.max}</span>
+                  <span
+                    className={`font-bold ${
+                      mealSlotStats.dinner.inTargetPct >= 70 ? 'text-emerald-600' : 'text-amber-600'
+                    }`}
+                  >
+                    {mealSlotStats.dinner.inTargetPct}% In Target
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* REAL DATA CLINICAL INSIGHTS */}
+          <div className="bg-gradient-to-r from-blue-50/80 to-indigo-50/80 dark:from-slate-800/80 dark:to-slate-800/40 border border-blue-100 dark:border-slate-700 rounded-3xl p-5 sm:p-6 shadow-sm space-y-3">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-blue-600" />
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                Live Data-Driven Clinical Observations
+              </h3>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+              {liveInsights.map((insight, idx) => (
+                <div
+                  key={idx}
+                  className="p-3.5 rounded-2xl bg-white/90 dark:bg-slate-900/90 border border-slate-200/60 dark:border-slate-800 space-y-1 shadow-xs"
+                >
+                  <div className="flex items-center gap-1.5 font-bold">
+                    {insight.type === 'success' ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    ) : insight.type === 'warning' ? (
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                    ) : (
+                      <Info className="w-3.5 h-3.5 text-blue-500" />
+                    )}
+                    <span
+                      className={
+                        insight.type === 'success'
+                          ? 'text-emerald-700 dark:text-emerald-300'
+                          : insight.type === 'warning'
+                          ? 'text-amber-700 dark:text-amber-300'
+                          : 'text-blue-700 dark:text-blue-300'
+                      }
+                    >
+                      {insight.title}
+                    </span>
+                  </div>
+                  <p className="text-slate-600 dark:text-slate-400 leading-relaxed">{insight.desc}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* CHARTS: MEAL SLOTS + DAILY PROGRESSION LINE CHART */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Time of Day */}
+            {/* Chart 1: Meal Slot Averages vs Targets */}
             <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                    <Clock className="w-4 h-4 text-blue-500" />
-                    Time of Day Distribution ({settings.unit})
+                    <Utensils className="w-4 h-4 text-blue-500" />
+                    Meal Slot Averages ({settings.unit})
                   </h3>
-                  <p className="text-xs text-slate-400">Average glucose levels during key periods</p>
+                  <p className="text-xs text-slate-400">Mean blood sugar across daily measurement slots</p>
                 </div>
               </div>
 
               <div className="h-64 w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={timeOfDayData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <BarChart data={mealSlotsChartData} margin={{ top: 15, right: 10, left: -20, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#94a3b8" opacity={0.15} />
-                    <XAxis dataKey="slot" tick={{ fontSize: 9, fill: '#94a3b8' }} />
+                    <XAxis dataKey="slot" tick={{ fontSize: 10, fill: '#94a3b8' }} />
                     <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} />
                     <Tooltip
                       contentStyle={{
@@ -558,31 +940,38 @@ export const AnalyticsView: React.FC = () => {
                         color: '#f8fafc',
                         fontSize: '11px',
                       }}
-                      formatter={(val: any) => [`${val} ${settings.unit}`, 'Average']}
+                      formatter={(val: any, _name: any, item: any) => [
+                        `${val} ${settings.unit} (Target: < ${item.payload.targetLimit}, ${item.payload.inTargetPct}% in range)`,
+                        'Average',
+                      ]}
                     />
-                    <Bar dataKey="average" fill="#3b82f6" radius={[6, 6, 0, 0]} />
+                    <Bar dataKey="average" radius={[8, 8, 0, 0]}>
+                      {mealSlotsChartData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.fillColor} />
+                      ))}
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>
             </div>
 
-            {/* Day of the Week */}
+            {/* Chart 2: Daily Progression Line Chart (Day by Day) */}
             <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                    <Calendar className="w-4 h-4 text-emerald-500" />
-                    Day of Week Patterns ({settings.unit})
+                    <TrendingUp className="w-4 h-4 text-emerald-500" />
+                    Daily Glycemic Progression ({settings.unit})
                   </h3>
-                  <p className="text-xs text-slate-400">Assess weekday vs weekend glycemic variations</p>
+                  <p className="text-xs text-slate-400">Fasting vs Post-Meal trends across consecutive days</p>
                 </div>
               </div>
 
               <div className="h-64 w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={dayOfWeekData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <LineChart data={dailyTrendsChartData} margin={{ top: 15, right: 10, left: -20, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#94a3b8" opacity={0.15} />
-                    <XAxis dataKey="day" tick={{ fontSize: 10, fill: '#94a3b8' }} />
+                    <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#94a3b8' }} />
                     <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} />
                     <Tooltip
                       contentStyle={{
@@ -592,12 +981,72 @@ export const AnalyticsView: React.FC = () => {
                         color: '#f8fafc',
                         fontSize: '11px',
                       }}
-                      formatter={(val: any) => [`${val} ${settings.unit}`, 'Average']}
+                      formatter={(val: any, name: any) => [`${val} ${settings.unit}`, name]}
                     />
-                    <Bar dataKey="average" fill="#10b981" radius={[6, 6, 0, 0]} />
-                  </BarChart>
+                    <ReferenceLine
+                      y={convertFromInternal(settings.ranges.fasting.normalMax, settings.unit)}
+                      stroke="#10b981"
+                      strokeDasharray="4 4"
+                      label={{
+                        value: `Fasting Limit`,
+                        fill: '#10b981',
+                        fontSize: 9,
+                        position: 'top',
+                      }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="Fasting"
+                      stroke="#10b981"
+                      strokeWidth={2.5}
+                      dot={{ r: 3, fill: '#10b981' }}
+                      connectNulls
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="Post-Meal"
+                      stroke="#3b82f6"
+                      strokeWidth={2.5}
+                      dot={{ r: 3, fill: '#3b82f6' }}
+                      connectNulls
+                    />
+                  </LineChart>
                 </ResponsiveContainer>
               </div>
+            </div>
+          </div>
+
+          {/* Chart 3: Day of Week Patterns */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-indigo-500" />
+                  Day of Week Patterns ({settings.unit})
+                </h3>
+                <p className="text-xs text-slate-400">Assess weekday vs weekend glycemic variations</p>
+              </div>
+            </div>
+
+            <div className="h-56 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={dayOfWeekData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#94a3b8" opacity={0.15} />
+                  <XAxis dataKey="day" tick={{ fontSize: 10, fill: '#94a3b8' }} />
+                  <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                      borderRadius: '12px',
+                      border: 'none',
+                      color: '#f8fafc',
+                      fontSize: '11px',
+                    }}
+                    formatter={(val: any) => [`${val} ${settings.unit}`, 'Average']}
+                  />
+                  <Bar dataKey="average" fill="#6366f1" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           </div>
         </>
