@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { useBloodSugar } from '../context/BloodSugarContext';
 import { BloodSugarUnit, TargetProfile, TargetRangeConfig } from '../types';
-import { DEFAULT_RANGES, DIABETES_MANAGEMENT_RANGES } from '../utils/analysis';
+import { DEFAULT_RANGES, DIABETES_MANAGEMENT_RANGES, TIGHT_TARGET_RANGES } from '../utils/analysis';
 import { convertFromInternal, convertToInternal, formatBloodSugar } from '../utils/conversions';
 import { ConfirmationModal } from '../components/ConfirmationModal';
 import { MedicalDisclaimer } from '../components/MedicalDisclaimer';

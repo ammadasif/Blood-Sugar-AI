@@ -1,105 +1,96 @@
 import { BloodSugarReading } from '../types';
 
 /**
- * Generates realistic 14-day blood sugar monitoring sample data
- * Covers fasting, pre-meal, 1h-post-meal, 2h-post-meal, and random readings
- * with realistic fluctuations and notes.
+ * Pre-populates realistic blood sugar records corresponding directly
+ * to the user's standard 17-day Daily Monitoring Matrix.
  */
 export function generateSampleReadings(): BloodSugarReading[] {
   const readings: BloodSugarReading[] = [];
-  const now = new Date();
 
-  // 14 days ago up to today
-  for (let i = 13; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    const dateStr = d.toISOString().split('T')[0];
+  const rawDataset = [
+    { date: '2026-10-30', fasting: 97, bfast: 160, lunch: 114, dinner: 134 },
+    { date: '2026-10-31', fasting: 99, bfast: 90,  lunch: 124, dinner: 161 },
+    { date: '2026-11-01', fasting: 124, bfast: 104, lunch: 129, dinner: 137 },
+    { date: '2026-11-02', fasting: 109, bfast: 116, lunch: 103, dinner: 147 },
+    { date: '2026-11-03', fasting: 103, bfast: 105, lunch: 124, dinner: 154 },
+    { date: '2026-11-04', fasting: 109, bfast: 108, lunch: 112, dinner: 137 },
+    { date: '2026-11-05', fasting: 106, bfast: null, lunch: null, dinner: null },
+    { date: '2026-11-06', fasting: 95,  bfast: 96,  lunch: 108, dinner: 107 },
+    { date: '2026-11-07', fasting: 96,  bfast: 107, lunch: 108, dinner: 109 },
+    { date: '2026-11-08', fasting: 95,  bfast: 99,  lunch: 111, dinner: 91 },
+    { date: '2026-11-09', fasting: 97,  bfast: null, lunch: 115, dinner: 112 },
+    { date: '2026-11-10', fasting: 94,  bfast: null, lunch: 111, dinner: 116 },
+    { date: '2026-11-11', fasting: 98,  bfast: null, lunch: 103, dinner: 86 },
+    { date: '2026-11-12', fasting: 99,  bfast: null, lunch: 106, dinner: 107 },
+    { date: '2026-11-13', fasting: 94,  bfast: null, lunch: 117, dinner: 109 },
+    { date: '2026-11-14', fasting: 108, bfast: null, lunch: null, dinner: null },
+    { date: '2026-11-15', fasting: 94,  bfast: 98,  lunch: 114, dinner: null },
+  ];
 
-    // Day variability factor
-    const dayFactor = Math.sin(i) * 5;
-
-    // 1. Morning Fasting (7:00 - 7:30 AM)
-    const fastingValue = Math.round(88 + dayFactor + (Math.random() * 16 - 8));
-    readings.push({
-      id: `sample_fasting_${dateStr}`,
-      date: dateStr,
-      time: '07:15',
-      value: Math.max(72, fastingValue),
-      unitAtEntry: 'mg/dL',
-      type: 'fasting',
-      notes: i % 4 === 0 ? 'Woke up well rested' : undefined,
-      createdAt: new Date(`${dateStr}T07:15:00`).getTime(),
-      updatedAt: new Date(`${dateStr}T07:15:00`).getTime(),
-    });
-
-    // 2. Post-Breakfast (2h post-meal: 9:30 AM)
-    const postBreakfast = Math.round(124 + dayFactor * 1.5 + (Math.random() * 20 - 10));
-    readings.push({
-      id: `sample_post_breakfast_${dateStr}`,
-      date: dateStr,
-      time: '09:30',
-      value: postBreakfast,
-      unitAtEntry: 'mg/dL',
-      type: '2h_after_meal',
-      mealInfo: i % 2 === 0 ? 'Oatmeal with berries and walnuts' : 'Eggs and whole grain toast',
-      notes: 'Felt energetic',
-      createdAt: new Date(`${dateStr}T09:30:00`).getTime(),
-      updatedAt: new Date(`${dateStr}T09:30:00`).getTime(),
-    });
-
-    // 3. Before Lunch (12:45 PM) - alternate days
-    if (i % 2 === 1) {
-      const preLunch = Math.round(92 + (Math.random() * 14 - 7));
+  rawDataset.forEach((day, idx) => {
+    // 1. Fasting (07:30)
+    if (day.fasting !== null) {
       readings.push({
-        id: `sample_pre_lunch_${dateStr}`,
-        date: dateStr,
-        time: '12:45',
-        value: preLunch,
+        id: `reading_${day.date}_0730_${idx}`,
+        date: day.date,
+        time: '07:30',
+        value: day.fasting,
         unitAtEntry: 'mg/dL',
-        type: 'before_meal',
-        notes: 'Before lunch check',
-        createdAt: new Date(`${dateStr}T12:45:00`).getTime(),
-        updatedAt: new Date(`${dateStr}T12:45:00`).getTime(),
+        type: 'fasting',
+        notes: day.fasting > 100 ? 'Slightly elevated fasting level' : 'Normal morning baseline',
+        createdAt: new Date(`${day.date}T07:30:00`).getTime(),
+        updatedAt: new Date(`${day.date}T07:30:00`).getTime(),
       });
     }
 
-    // 4. Post-Dinner (2h post-meal: 20:30 PM)
-    // Add one or two higher readings to show warnings/screening context realistically
-    let postDinner = Math.round(132 + (Math.random() * 24 - 12));
-    if (i === 3) postDinner = 168; // Elevated reading example
-    if (i === 8) postDinner = 148; // Mildly elevated
-
-    readings.push({
-      id: `sample_post_dinner_${dateStr}`,
-      date: dateStr,
-      time: '20:30',
-      value: postDinner,
-      unitAtEntry: 'mg/dL',
-      type: '2h_after_meal',
-      mealInfo: i === 3 ? 'Pasta dinner with dessert' : 'Grilled salmon with quinoa and vegetables',
-      notes: i === 3 ? 'Higher carb meal, dessert had refined sugar' : 'Light evening walk completed',
-      createdAt: new Date(`${dateStr}T20:30:00`).getTime(),
-      updatedAt: new Date(`${dateStr}T20:30:00`).getTime(),
-    });
-
-    // 5. Occasional Random or Bedtime check (22:45 PM)
-    if (i % 3 === 0) {
-      const bedtime = Math.round(105 + (Math.random() * 16 - 8));
+    // 2. 2 Hours After Breakfast (09:30)
+    if (day.bfast !== null) {
       readings.push({
-        id: `sample_random_${dateStr}`,
-        date: dateStr,
-        time: '22:45',
-        value: bedtime,
+        id: `reading_${day.date}_0930_${idx}`,
+        date: day.date,
+        time: '09:30',
+        value: day.bfast,
         unitAtEntry: 'mg/dL',
-        type: 'random',
-        notes: 'Pre-bedtime check',
-        createdAt: new Date(`${dateStr}T22:45:00`).getTime(),
-        updatedAt: new Date(`${dateStr}T22:45:00`).getTime(),
+        type: '2h_after_meal',
+        mealInfo: 'Breakfast',
+        notes: day.bfast > 140 ? 'Higher post-breakfast glycemic response' : 'Good response',
+        createdAt: new Date(`${day.date}T09:30:00`).getTime(),
+        updatedAt: new Date(`${day.date}T09:30:00`).getTime(),
       });
     }
-  }
 
-  // Sort descending by date and time
+    // 3. 2 Hours After Lunch (14:00)
+    if (day.lunch !== null) {
+      readings.push({
+        id: `reading_${day.date}_1400_${idx}`,
+        date: day.date,
+        time: '14:00',
+        value: day.lunch,
+        unitAtEntry: 'mg/dL',
+        type: '2h_after_meal',
+        mealInfo: 'Lunch',
+        notes: '2 hours post-lunch test',
+        createdAt: new Date(`${day.date}T14:00:00`).getTime(),
+        updatedAt: new Date(`${day.date}T14:00:00`).getTime(),
+      });
+    }
+
+    // 4. 2 Hours After Dinner (21:00)
+    if (day.dinner !== null) {
+      readings.push({
+        id: `reading_${day.date}_2100_${idx}`,
+        date: day.date,
+        time: '21:00',
+        value: day.dinner,
+        unitAtEntry: 'mg/dL',
+        type: '2h_after_meal',
+        mealInfo: 'Dinner',
+        notes: '2 hours post-dinner test',
+        createdAt: new Date(`${day.date}T21:00:00`).getTime(),
+        updatedAt: new Date(`${day.date}T21:00:00`).getTime(),
+      });
+    }
+  });
+
   return readings.sort((a, b) => `${b.date}T${b.time}`.localeCompare(`${a.date}T${a.time}`));
 }
-

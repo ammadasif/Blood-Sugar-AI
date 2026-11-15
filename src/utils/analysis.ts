@@ -51,6 +51,31 @@ export const DIABETES_MANAGEMENT_RANGES: TargetRangeConfig = {
   veryHighThreshold: 250,
 };
 
+export const TIGHT_TARGET_RANGES: TargetRangeConfig = {
+  lowThreshold: 60,
+  fasting: {
+    normalMax: 95, // Strict/Gestational target: 60-95 mg/dL
+    elevatedMax: 125,
+  },
+  beforeMeal: {
+    normalMax: 95,
+    elevatedMax: 125,
+  },
+  afterMeal1h: {
+    normalMax: 130,
+    elevatedMax: 160,
+  },
+  afterMeal2h: {
+    normalMax: 125, // Strict post-meal target: 70-125 mg/dL
+    elevatedMax: 160,
+  },
+  random: {
+    normalMax: 125,
+    elevatedMax: 160,
+  },
+  veryHighThreshold: 200,
+};
+
 export const READING_TYPE_LABELS: Record<ReadingType, string> = {
   fasting: 'Fasting',
   before_meal: 'Before Meal',

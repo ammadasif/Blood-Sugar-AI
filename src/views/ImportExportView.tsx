@@ -17,6 +17,8 @@ import {
 import { useBloodSugar } from '../context/BloodSugarContext';
 import {
   exportToExcel,
+  exportToDailyMatrixExcel,
+  exportToDailyMatrixCSV,
   parseExcelFile,
   downloadExcelTemplate,
   downloadCSVTemplate,
@@ -117,6 +119,16 @@ export const ImportExportView: React.FC = () => {
   };
 
   // Export triggers with backup recording
+  const handleExportDailyMatrixExcel = () => {
+    exportToDailyMatrixExcel(readings, settings);
+    markBackupCompleted();
+  };
+
+  const handleExportDailyMatrixCSV = () => {
+    exportToDailyMatrixCSV(readings, settings);
+    markBackupCompleted();
+  };
+
   const handleExportExcelAll = () => {
     exportToExcel(readings, settings, 'All_Readings');
     markBackupCompleted();
@@ -259,9 +271,16 @@ export const ImportExportView: React.FC = () => {
           {excelResult && (
             <div className="space-y-4 border-t border-slate-100 dark:border-slate-800 pt-4 animate-fade-in">
               <div className="flex items-center justify-between text-xs">
-                <span className="font-bold text-slate-800 dark:text-slate-200">
-                  Spreadsheet Preview ({excelResult.totalRows} rows parsed)
-                </span>
+                <div>
+                  <span className="font-bold text-slate-800 dark:text-slate-200 block">
+                    Spreadsheet Preview ({excelResult.totalRows} {excelResult.formatDetected === 'matrix_daily' ? 'readings extracted from daily matrix' : 'rows parsed'})
+                  </span>
+                  {excelResult.formatDetected === 'matrix_daily' && (
+                    <span className="inline-block mt-0.5 text-[10px] font-bold text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-950/80 px-2 py-0.5 rounded-md">
+                      ✓ Daily Logbook Matrix Format (Fasting, Breakfast, Lunch, Dinner)
+                    </span>
+                  )}
+                </div>
                 <div className="flex items-center gap-2 font-medium">
                   <span className="text-emerald-600 font-bold">{excelResult.validRows.length} Valid</span>
                   <span>•</span>
@@ -369,6 +388,46 @@ export const ImportExportView: React.FC = () => {
           </div>
 
           <div className="space-y-3">
+            {/* Daily Matrix Logbook Export - Featured Format */}
+            <div className="p-4 rounded-2xl bg-gradient-to-r from-blue-50 to-emerald-50 dark:from-blue-950/40 dark:to-emerald-950/40 border border-blue-200 dark:border-blue-800/60 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-blue-600 text-white rounded-xl">
+                    <FileSpreadsheet className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Export Daily Logbook Table (Matrix Format)
+                    </h4>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Columns: Date | Fasting | 2h Breakfast | 2h Lunch | 2h Dinner
+                    </p>
+                  </div>
+                </div>
+                <span className="text-[10px] font-bold uppercase tracking-wider bg-blue-600 text-white px-2 py-0.5 rounded-md">
+                  Standard Format
+                </span>
+              </div>
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  onClick={handleExportDailyMatrixExcel}
+                  disabled={readings.length === 0}
+                  className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-sm transition flex items-center gap-1.5 disabled:opacity-40"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download Excel (.xlsx)</span>
+                </button>
+                <button
+                  onClick={handleExportDailyMatrixCSV}
+                  disabled={readings.length === 0}
+                  className="px-3.5 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold shadow-sm hover:bg-slate-50 transition flex items-center gap-1.5 disabled:opacity-40"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download CSV (.csv)</span>
+                </button>
+              </div>
+            </div>
+
             <button
               onClick={handleExportExcelAll}
               disabled={readings.length === 0}

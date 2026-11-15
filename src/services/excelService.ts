@@ -1,7 +1,13 @@
 import * as XLSX from 'xlsx';
 import { BloodSugarReading, ReadingType, AppSettings } from '../types';
 import { analyzeReading, READING_TYPE_LABELS } from '../utils/analysis';
-import { convertFromInternal, formatBloodSugar } from '../utils/conversions';
+import {
+  convertFromInternal,
+  formatBloodSugar,
+  formatDateDMY,
+  parseFlexibleDate,
+} from '../utils/conversions';
+import { getDailyMatrixRows } from '../utils/matrixHelper';
 
 export interface ExcelImportRow {
   rowNumber: number;
@@ -24,6 +30,7 @@ export interface ExcelImportResult {
   duplicateRows: ExcelImportRow[];
   invalidRows: ExcelImportRow[];
   allPreviewRows: ExcelImportRow[];
+  formatDetected: 'matrix_daily' | 'flat_list';
 }
 
 /**
@@ -39,7 +46,10 @@ export function normalizeReadingType(input: string): ReadingType {
 }
 
 /**
- * Parses and validates an uploaded Excel file (.xlsx or .xls)
+ * Parses and validates an uploaded Excel or CSV file.
+ * Automatically recognizes:
+ * 1. Matrix Daily Logbook format (Date | Fasting | 2h Breakfast | 2h Lunch | 2h Dinner)
+ * 2. Flat Standard format (Date | Time | Blood Sugar | Type | Notes)
  */
 export async function parseExcelFile(
   file: File,
@@ -48,9 +58,9 @@ export async function parseExcelFile(
 ): Promise<ExcelImportResult> {
   const buffer = await file.arrayBuffer();
   const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
-  
+
   if (!workbook.SheetNames.length) {
-    throw new Error('The uploaded Excel file contains no worksheets.');
+    throw new Error('The uploaded file contains no worksheets.');
   }
 
   const sheetName = workbook.SheetNames[0];
@@ -61,7 +71,7 @@ export async function parseExcelFile(
   });
 
   if (!rawData || rawData.length === 0) {
-    throw new Error('The Excel worksheet is empty.');
+    throw new Error('The worksheet is empty.');
   }
 
   // Create duplicate lookup set based on date + time
@@ -73,10 +83,139 @@ export async function parseExcelFile(
   const duplicateRows: ExcelImportRow[] = [];
   const invalidRows: ExcelImportRow[] = [];
 
-  rawData.forEach((row, index) => {
-    const rowNum = index + 2; // +1 for 0-index, +1 for header row
+  // Check if columns match Daily Matrix format
+  const firstRowKeys = Object.keys(rawData[0] || {}).map((k) => k.toLowerCase());
+  const isMatrixFormat =
+    firstRowKeys.some((k) => k.includes('fasting')) &&
+    (firstRowKeys.some((k) => k.includes('breakfast')) ||
+      firstRowKeys.some((k) => k.includes('lunch')) ||
+      firstRowKeys.some((k) => k.includes('dinner')));
 
-    // Find columns by flexible header names
+  if (isMatrixFormat) {
+    // =========================================================================
+    // 1. DAILY MATRIX FORMAT PARSER
+    // =========================================================================
+    let currentRowNum = 1;
+
+    rawData.forEach((row) => {
+      currentRowNum++;
+      let dateRaw = '';
+      let fastingVal: any = null;
+      let breakfastVal: any = null;
+      let lunchVal: any = null;
+      let dinnerVal: any = null;
+
+      for (const [key, val] of Object.entries(row)) {
+        const lower = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (lower.includes('date')) {
+          dateRaw = String(val).trim();
+        } else if (lower.includes('fasting')) {
+          fastingVal = val;
+        } else if (lower.includes('breakfast')) {
+          breakfastVal = val;
+        } else if (lower.includes('lunch')) {
+          lunchVal = val;
+        } else if (lower.includes('dinner')) {
+          dinnerVal = val;
+        }
+      }
+
+      const parsedDate = parseFlexibleDate(dateRaw);
+      // Skip legend or empty footer rows (e.g., 'Test, Range (mg/dL)', 'Fasting (8-10 hours)')
+      if (!parsedDate) {
+        return;
+      }
+
+      // Helper to process individual meal slot in this row
+      const processSlot = (
+        rawValue: any,
+        slotType: ReadingType,
+        slotTime: string,
+        slotMeal: string | undefined,
+        slotLabel: string
+      ) => {
+        if (rawValue === '' || rawValue === null || rawValue === undefined) {
+          return;
+        }
+
+        const cleanNum = parseFloat(String(rawValue).replace(/[^0-9.]/g, ''));
+        if (isNaN(cleanNum) || cleanNum <= 0) {
+          return;
+        }
+
+        const lookupKey = `${parsedDate}#${slotTime}`;
+        const isDuplicate = existingSet.has(lookupKey) || importedInThisBatchSet.has(lookupKey);
+        if (!isDuplicate) {
+          importedInThisBatchSet.add(lookupKey);
+        }
+
+        const status: 'valid' | 'duplicate' = isDuplicate ? 'duplicate' : 'valid';
+        const now = Date.now();
+
+        // Convert value to internal mg/dL if needed
+        let finalMgDl = cleanNum;
+        if (settings.unit === 'mmol/L' && cleanNum < 35) {
+          finalMgDl = Math.round(cleanNum * 18.0182);
+        }
+
+        const reading: BloodSugarReading = {
+          id: `reading_${parsedDate}_${slotTime.replace(':', '')}_${Math.random().toString(36).substring(2, 6)}`,
+          date: parsedDate,
+          time: slotTime,
+          value: Math.round(finalMgDl),
+          unitAtEntry: settings.unit,
+          type: slotType,
+          mealInfo: slotMeal,
+          notes: slotLabel,
+          createdAt: now,
+          updatedAt: now,
+        };
+
+        const previewItem: ExcelImportRow = {
+          rowNumber: currentRowNum,
+          date: parsedDate,
+          time: slotTime,
+          sugarLevel: cleanNum,
+          unit: settings.unit,
+          type: slotType,
+          typeRaw: slotLabel,
+          mealInfo: slotMeal,
+          notes: slotLabel,
+          status,
+          validationMessage: isDuplicate
+            ? `Duplicate entry found on ${parsedDate} at ${slotTime}`
+            : undefined,
+          parsedReading: reading,
+        };
+
+        allPreviewRows.push(previewItem);
+        if (status === 'valid') validRows.push(previewItem);
+        else duplicateRows.push(previewItem);
+      };
+
+      // Process up to 4 readings per day row
+      processSlot(fastingVal, 'fasting', '07:30', undefined, 'Fasting (Morning)');
+      processSlot(breakfastVal, '2h_after_meal', '09:30', 'Breakfast', '2 Hours After Breakfast');
+      processSlot(lunchVal, '2h_after_meal', '14:00', 'Lunch', '2 Hours After Lunch');
+      processSlot(dinnerVal, '2h_after_meal', '21:00', 'Dinner', '2 Hours After Dinner');
+    });
+
+    return {
+      totalRows: allPreviewRows.length,
+      validRows,
+      duplicateRows,
+      invalidRows,
+      allPreviewRows,
+      formatDetected: 'matrix_daily',
+    };
+  }
+
+  // =========================================================================
+  // 2. STANDARD FLAT ROW-BY-ROW FORMAT PARSER
+  // =========================================================================
+  rawData.forEach((row, index) => {
+    const rowNum = index + 2;
+
     let dateVal = '';
     let timeVal = '';
     let levelVal: any = null;
@@ -111,56 +250,7 @@ export async function parseExcelFile(
       }
     }
 
-    // Standardize date (YYYY-MM-DD)
-    let parsedDate = '';
-    if (dateVal) {
-      const trimmedDate = String(dateVal).trim();
-      if (/^\d{4}-\d{2}-\d{2}$/.test(trimmedDate)) {
-        parsedDate = trimmedDate;
-      } else if (/^\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4}$/.test(trimmedDate)) {
-        const parts = trimmedDate.split(/[\/\-\.]/);
-        const p0 = parseInt(parts[0], 10);
-        const p1 = parseInt(parts[1], 10);
-        const p2 = parseInt(parts[2], 10);
-        if (p0 > 12) {
-          // DD/MM/YYYY format
-          parsedDate = `${p2}-${String(p1).padStart(2, '0')}-${String(p0).padStart(2, '0')}`;
-        } else if (p1 > 12) {
-          // MM/DD/YYYY format
-          parsedDate = `${p2}-${String(p0).padStart(2, '0')}-${String(p1).padStart(2, '0')}`;
-        } else {
-          // Fallback based on standard date parse
-          const parsedD = new Date(trimmedDate);
-          if (!isNaN(parsedD.getTime())) {
-            const y = parsedD.getFullYear();
-            const m = String(parsedD.getMonth() + 1).padStart(2, '0');
-            const d = String(parsedD.getDate()).padStart(2, '0');
-            parsedDate = `${y}-${m}-${d}`;
-          } else {
-            // Default to YYYY-MM-DD assuming DD/MM/YYYY
-            parsedDate = `${p2}-${String(p1).padStart(2, '0')}-${String(p0).padStart(2, '0')}`;
-          }
-        }
-      } else if (!isNaN(Number(trimmedDate)) && Number(trimmedDate) > 30000 && Number(trimmedDate) < 70000) {
-        // Excel serial date number
-        const excelEpoch = new Date(Date.UTC(1899, 11, 30));
-        const jsDate = new Date(excelEpoch.getTime() + Number(trimmedDate) * 86400000);
-        if (!isNaN(jsDate.getTime())) {
-          const y = jsDate.getUTCFullYear();
-          const m = String(jsDate.getUTCMonth() + 1).padStart(2, '0');
-          const d = String(jsDate.getUTCDate()).padStart(2, '0');
-          parsedDate = `${y}-${m}-${d}`;
-        }
-      } else {
-        const parsedD = new Date(trimmedDate);
-        if (!isNaN(parsedD.getTime())) {
-          const y = parsedD.getFullYear();
-          const m = String(parsedD.getMonth() + 1).padStart(2, '0');
-          const d = String(parsedD.getDate()).padStart(2, '0');
-          parsedDate = `${y}-${m}-${d}`;
-        }
-      }
-    }
+    const parsedDate = parseFlexibleDate(dateVal);
 
     // Standardize time (HH:mm)
     let parsedTime = '';
@@ -173,7 +263,6 @@ export async function parseExcelFile(
           parsedTime = `${hours}:${mins}`;
         }
       } else {
-        // Fallback or trim
         const match = timeVal.match(/(\d{1,2}):(\d{2})/);
         if (match) {
           parsedTime = `${match[1].padStart(2, '0')}:${match[2]}`;
@@ -181,10 +270,9 @@ export async function parseExcelFile(
       }
     }
     if (!parsedTime) {
-      parsedTime = '12:00'; // Default fallback time if missing
+      parsedTime = '12:00';
     }
 
-    // Parse numeric level
     const parsedLevel = parseFloat(String(levelVal).replace(/[^0-9.]/g, ''));
     const readingType = normalizeReadingType(typeVal);
 
@@ -207,14 +295,13 @@ export async function parseExcelFile(
       }
     }
 
-    // Convert value to internal mg/dL if unit was mmol/L
     let finalMgDl = parsedLevel;
     if (unitVal === 'mmol/L' && !isNaN(parsedLevel)) {
       finalMgDl = Math.round(parsedLevel * 18.0182);
     }
 
     let parsedReading: BloodSugarReading | undefined = undefined;
-    if (status !== 'invalid') {
+    if (status !== 'invalid' && parsedDate) {
       const now = Date.now();
       parsedReading = {
         id: `reading_${parsedDate}_${parsedTime.replace(':', '')}_${Math.random().toString(36).substring(2, 7)}`,
@@ -257,11 +344,141 @@ export async function parseExcelFile(
     duplicateRows,
     invalidRows,
     allPreviewRows,
+    formatDetected: 'flat_list',
   };
 }
 
 /**
- * Exports blood sugar readings to an Excel (.xlsx) file with professional formatting
+ * EXPORT 1: Daily Matrix Format (Logbook Table) - EXACT format requested by user
+ * Columns: Sr. No., Date (30-Oct-2026), Fasting (mg/dL), 2 Hours After Breakfast, 2 Hours After Lunch, 2 Hours After Dinner
+ */
+export function exportToDailyMatrixExcel(
+  readings: BloodSugarReading[],
+  settings: AppSettings,
+  filenamePrefix = 'GlucoTrack_Daily_Logbook'
+): void {
+  const matrixRows = getDailyMatrixRows(readings, settings, 'asc');
+
+  const excelRows = matrixRows.map((row) => ({
+    'Sr. No.': row.srNo,
+    'Date': row.dateDisplay,
+    [`Fasting (${settings.unit})`]: row.fasting ? convertFromInternal(row.fasting.value, settings.unit) : '',
+    [`2 Hours After Breakfast (${settings.unit})`]: row.breakfast ? convertFromInternal(row.breakfast.value, settings.unit) : '',
+    [`2 Hours After Lunch (${settings.unit})`]: row.lunch ? convertFromInternal(row.lunch.value, settings.unit) : '',
+    [`2 Hours After Dinner (${settings.unit})`]: row.dinner ? convertFromInternal(row.dinner.value, settings.unit) : '',
+  }));
+
+  // Empty separator
+  excelRows.push({
+    'Sr. No.': '',
+    'Date': '',
+    [`Fasting (${settings.unit})`]: '',
+    [`2 Hours After Breakfast (${settings.unit})`]: '',
+    [`2 Hours After Lunch (${settings.unit})`]: '',
+    [`2 Hours After Dinner (${settings.unit})`]: '',
+  } as any);
+
+  // Range legend at bottom matching user's template
+  const lowF = convertFromInternal(settings.ranges.lowThreshold, settings.unit);
+  const maxF = convertFromInternal(settings.ranges.fasting.normalMax, settings.unit);
+  const max2h = convertFromInternal(settings.ranges.afterMeal2h.normalMax, settings.unit);
+
+  excelRows.push({
+    'Sr. No.': 'Test',
+    'Date': `Range (${settings.unit})`,
+    [`Fasting (${settings.unit})`]: '',
+    [`2 Hours After Breakfast (${settings.unit})`]: '',
+    [`2 Hours After Lunch (${settings.unit})`]: '',
+    [`2 Hours After Dinner (${settings.unit})`]: '',
+  } as any);
+
+  excelRows.push({
+    'Sr. No.': 'Fasting (8–10 hours)',
+    'Date': `${lowF}–${maxF}`,
+    [`Fasting (${settings.unit})`]: '',
+    [`2 Hours After Breakfast (${settings.unit})`]: '',
+    [`2 Hours After Lunch (${settings.unit})`]: '',
+    [`2 Hours After Dinner (${settings.unit})`]: '',
+  } as any);
+
+  excelRows.push({
+    'Sr. No.': '2 hours after meal',
+    'Date': `70–${max2h}`,
+    [`Fasting (${settings.unit})`]: '',
+    [`2 Hours After Breakfast (${settings.unit})`]: '',
+    [`2 Hours After Lunch (${settings.unit})`]: '',
+    [`2 Hours After Dinner (${settings.unit})`]: '',
+  } as any);
+
+  const worksheet = XLSX.utils.json_to_sheet(excelRows);
+  worksheet['!cols'] = [
+    { wch: 22 },
+    { wch: 16 },
+    { wch: 18 },
+    { wch: 32 },
+    { wch: 28 },
+    { wch: 28 },
+  ];
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Daily_Logbook');
+
+  const filename = `${filenamePrefix}_${new Date().toISOString().split('T')[0]}.xlsx`;
+  XLSX.writeFile(workbook, filename);
+}
+
+/**
+ * EXPORT 2: Daily Matrix Format as CSV
+ */
+export function exportToDailyMatrixCSV(
+  readings: BloodSugarReading[],
+  settings: AppSettings,
+  filenamePrefix = 'GlucoTrack_Daily_Logbook'
+): void {
+  const matrixRows = getDailyMatrixRows(readings, settings, 'asc');
+
+  const headers = [
+    'Sr. No.',
+    'Date',
+    `Fasting (${settings.unit})`,
+    `2 Hours After Breakfast (${settings.unit})`,
+    `2 Hours After Lunch (${settings.unit})`,
+    `2 Hours After Dinner (${settings.unit})`,
+  ];
+
+  const rows = matrixRows.map((r) => [
+    r.srNo,
+    r.dateDisplay,
+    r.fasting ? convertFromInternal(r.fasting.value, settings.unit) : '',
+    r.breakfast ? convertFromInternal(r.breakfast.value, settings.unit) : '',
+    r.lunch ? convertFromInternal(r.lunch.value, settings.unit) : '',
+    r.dinner ? convertFromInternal(r.dinner.value, settings.unit) : '',
+  ].join(','));
+
+  const lowF = convertFromInternal(settings.ranges.lowThreshold, settings.unit);
+  const maxF = convertFromInternal(settings.ranges.fasting.normalMax, settings.unit);
+  const max2h = convertFromInternal(settings.ranges.afterMeal2h.normalMax, settings.unit);
+
+  const footer = [
+    'Test,Range (' + settings.unit + ')',
+    `Fasting (8–10 hours),${lowF}–${maxF}`,
+    `2 hours after meal,70–${max2h}`,
+  ];
+
+  const content = [headers.join(','), ...rows, footer.join('\r\n')].join('\r\n');
+  const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${filenamePrefix}_${new Date().toISOString().split('T')[0]}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * EXPORT 3: Detailed Row-by-Row Excel Export
  */
 export function exportToExcel(
   readings: BloodSugarReading[],
@@ -274,7 +491,7 @@ export function exportToExcel(
 
     return {
       '#': index + 1,
-      'Date': r.date,
+      'Date': formatDateDMY(r.date),
       'Time': r.time,
       [`Blood Sugar (${settings.unit})`]: displayValue,
       'Reading Type': READING_TYPE_LABELS[r.type] || r.type,
@@ -289,19 +506,18 @@ export function exportToExcel(
 
   const worksheet = XLSX.utils.json_to_sheet(rows);
 
-  // Set nice column widths
   worksheet['!cols'] = [
-    { wch: 5 },  // #
-    { wch: 12 }, // Date
-    { wch: 10 }, // Time
-    { wch: 18 }, // Blood Sugar
-    { wch: 20 }, // Reading Type
-    { wch: 12 }, // Status
-    { wch: 30 }, // Clinical Context
-    { wch: 22 }, // Meal Information
-    { wch: 26 }, // Notes & Symptoms
-    { wch: 24 }, // Comments
-    { wch: 45 }, // Recommendation
+    { wch: 5 },
+    { wch: 14 },
+    { wch: 10 },
+    { wch: 18 },
+    { wch: 20 },
+    { wch: 12 },
+    { wch: 30 },
+    { wch: 22 },
+    { wch: 26 },
+    { wch: 24 },
+    { wch: 45 },
   ];
 
   const workbook = XLSX.utils.book_new();
@@ -334,161 +550,145 @@ export function exportToExcel(
 }
 
 /**
- * Generates and downloads a ready-to-use sample Excel Import Template (.xlsx)
+ * Generates and downloads the exact Daily Matrix Template requested by the user (.xlsx)
  */
 export function downloadExcelTemplate(unit: 'mg/dL' | 'mmol/L' = 'mg/dL'): void {
   const isMmol = unit === 'mmol/L';
-  const templateRows = [
-    {
-      'Date': '2026-11-15',
-      'Time': '07:30',
-      'Blood Sugar': isMmol ? 5.2 : 94,
-      'Unit': unit,
-      'Reading Type': 'Fasting',
-      'Meal Information': '',
-      'Notes': 'Woke up well rested',
-      'Comments': 'Morning baseline',
-    },
-    {
-      'Date': '2026-11-15',
-      'Time': '09:30',
-      'Blood Sugar': isMmol ? 6.8 : 122,
-      'Unit': unit,
-      'Reading Type': '2 Hours After Meal',
-      'Meal Information': 'Oatmeal with almonds & blueberries',
-      'Notes': 'Felt good energy',
-      'Comments': 'Post-breakfast check',
-    },
-    {
-      'Date': '2026-11-15',
-      'Time': '13:00',
-      'Blood Sugar': isMmol ? 5.4 : 98,
-      'Unit': unit,
-      'Reading Type': 'Before Meal',
-      'Meal Information': 'Pre-lunch',
-      'Notes': '',
-      'Comments': '',
-    },
-    {
-      'Date': '2026-11-15',
-      'Time': '15:00',
-      'Blood Sugar': isMmol ? 7.6 : 138,
-      'Unit': unit,
-      'Reading Type': '2 Hours After Meal',
-      'Meal Information': 'Grilled chicken salad with olive oil',
-      'Notes': 'Light 15 min walk after lunch',
-      'Comments': '',
-    },
-    {
-      'Date': '2026-11-15',
-      'Time': '22:15',
-      'Blood Sugar': isMmol ? 5.8 : 105,
-      'Unit': unit,
-      'Reading Type': 'Random',
-      'Meal Information': '',
-      'Notes': 'Bedtime check',
-      'Comments': 'Normal day',
-    },
+  const sampleValues = [
+    { no: 1, date: '30-Oct-2026', f: 97, b: 160, l: 114, d: 134 },
+    { no: 2, date: '31-Oct-2026', f: 99, b: 90, l: 124, d: 161 },
+    { no: 3, date: '01-Nov-2026', f: 124, b: 104, l: 129, d: 137 },
+    { no: 4, date: '02-Nov-2026', f: 109, b: 116, l: 103, d: 147 },
+    { no: 5, date: '03-Nov-2026', f: 103, b: 105, l: 124, d: 154 },
+    { no: 6, date: '04-Nov-2026', f: 109, b: 108, l: 112, d: 137 },
+    { no: 7, date: '05-Nov-2026', f: 106, b: '', l: '', d: '' },
+    { no: 8, date: '06-Nov-2026', f: 95, b: 96, l: 108, d: 107 },
+    { no: 9, date: '07-Nov-2026', f: 96, b: 107, l: 108, d: 109 },
+    { no: 10, date: '08-Nov-2026', f: 95, b: 99, l: 111, d: 91 },
+    { no: 11, date: '09-Nov-2026', f: 97, b: '', l: 115, d: 112 },
+    { no: 12, date: '10-Nov-2026', f: 94, b: '', l: 111, d: 116 },
+    { no: 13, date: '11-Nov-2026', f: 98, b: '', l: 103, d: 86 },
+    { no: 14, date: '12-Nov-2026', f: 99, b: '', l: 106, d: 107 },
+    { no: 15, date: '13-Nov-2026', f: 94, b: '', l: 117, d: 109 },
+    { no: 16, date: '14-Nov-2026', f: 108, b: '', l: '', d: '' },
+    { no: 17, date: '15-Nov-2026', f: 94, b: 98, l: 114, d: '' },
   ];
 
-  const worksheet = XLSX.utils.json_to_sheet(templateRows);
+  const conv = (v: number | string) => {
+    if (v === '' || typeof v !== 'number') return '';
+    return isMmol ? Number((v / 18.0182).toFixed(1)) : v;
+  };
 
-  worksheet['!cols'] = [
-    { wch: 14 }, // Date
-    { wch: 10 }, // Time
-    { wch: 14 }, // Blood Sugar
-    { wch: 10 }, // Unit
-    { wch: 22 }, // Reading Type
-    { wch: 35 }, // Meal Information
-    { wch: 30 }, // Notes
-    { wch: 25 }, // Comments
+  const rows = sampleValues.map((s) => ({
+    'Sr. No.': s.no,
+    'Date': s.date,
+    [`Fasting (${unit})`]: conv(s.f),
+    [`2 Hours After Breakfast (${unit})`]: conv(s.b),
+    [`2 Hours After Lunch (${unit})`]: conv(s.l),
+    [`2 Hours After Dinner (${unit})`]: conv(s.d),
+  }));
+
+  // Separator
+  rows.push({
+    'Sr. No.': '',
+    'Date': '',
+    [`Fasting (${unit})`]: '',
+    [`2 Hours After Breakfast (${unit})`]: '',
+    [`2 Hours After Lunch (${unit})`]: '',
+    [`2 Hours After Dinner (${unit})`]: '',
+  } as any);
+
+  // Range legend
+  rows.push({
+    'Sr. No.': 'Test',
+    'Date': `Range (${unit})`,
+    [`Fasting (${unit})`]: '',
+    [`2 Hours After Breakfast (${unit})`]: '',
+    [`2 Hours After Lunch (${unit})`]: '',
+    [`2 Hours After Dinner (${unit})`]: '',
+  } as any);
+
+  rows.push({
+    'Sr. No.': 'Fasting (8–10 hours)',
+    'Date': isMmol ? '3.3–5.3' : '60–95',
+    [`Fasting (${unit})`]: '',
+    [`2 Hours After Breakfast (${unit})`]: '',
+    [`2 Hours After Lunch (${unit})`]: '',
+    [`2 Hours After Dinner (${unit})`]: '',
+  } as any);
+
+  rows.push({
+    'Sr. No.': '2 hours after meal',
+    'Date': isMmol ? '3.9–6.9' : '70–125',
+    [`Fasting (${unit})`]: '',
+    [`2 Hours After Breakfast (${unit})`]: '',
+    [`2 Hours After Lunch (${unit})`]: '',
+    [`2 Hours After Dinner (${unit})`]: '',
+  } as any);
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [
+    { wch: 22 },
+    { wch: 16 },
+    { wch: 18 },
+    { wch: 32 },
+    { wch: 28 },
+    { wch: 28 },
   ];
 
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Readings_Template');
-
-  // Sheet 2: Column instructions & guide
-  const guideRows = [
-    {
-      'Column Header': 'Date',
-      'Required': 'YES',
-      'Accepted Formats': 'YYYY-MM-DD (e.g. 2026-11-15), MM/DD/YYYY, or DD/MM/YYYY',
-      'Description': 'The date the measurement was recorded.',
-    },
-    {
-      'Column Header': 'Time',
-      'Required': 'YES',
-      'Accepted Formats': 'HH:mm (24-hour e.g. 07:30, 20:45) or 12-hour (7:30 AM, 8:45 PM)',
-      'Description': 'The time the test was performed.',
-    },
-    {
-      'Column Header': 'Blood Sugar',
-      'Required': 'YES',
-      'Accepted Formats': 'Number (e.g. 95, 120, or 5.4)',
-      'Description': 'Blood glucose test numeric value.',
-    },
-    {
-      'Column Header': 'Unit',
-      'Required': 'Optional',
-      'Accepted Formats': 'mg/dL or mmol/L',
-      'Description': 'Unit of entry (automatically converted to internal storage).',
-    },
-    {
-      'Column Header': 'Reading Type',
-      'Required': 'YES',
-      'Accepted Formats': 'Fasting, Before Meal, 1 Hour After Meal, 2 Hours After Meal, Random',
-      'Description': 'Contextual category used for clinical evaluation.',
-    },
-    {
-      'Column Header': 'Meal Information',
-      'Required': 'Optional',
-      'Accepted Formats': 'Free text (e.g. Oatmeal, Chicken Salad)',
-      'Description': 'Food and drinks consumed before or around the test.',
-    },
-    {
-      'Column Header': 'Notes',
-      'Required': 'Optional',
-      'Accepted Formats': 'Free text (e.g. 20 min walk, Felt dizzy)',
-      'Description': 'Symptoms, activities, or medications.',
-    },
-    {
-      'Column Header': 'Comments',
-      'Required': 'Optional',
-      'Accepted Formats': 'Free text',
-      'Description': 'Additional notes for personal reference or doctor.',
-    },
-  ];
-
-  const guideSheet = XLSX.utils.json_to_sheet(guideRows);
-  guideSheet['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 45 }, { wch: 45 }];
-  XLSX.utils.book_append_sheet(workbook, guideSheet, 'Instructions_Guide');
-
-  XLSX.writeFile(workbook, `GlucoTrack_Import_Template_${unit.replace('/', '_')}.xlsx`);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Daily_Logbook');
+  XLSX.writeFile(wb, `GlucoTrack_Daily_Logbook_Template_${unit.replace('/', '_')}.xlsx`);
 }
 
 /**
- * Generates and downloads a ready-to-use CSV Import Template (.csv)
+ * Generates and downloads the exact Daily Matrix Template as CSV
  */
 export function downloadCSVTemplate(unit: 'mg/dL' | 'mmol/L' = 'mg/dL'): void {
   const isMmol = unit === 'mmol/L';
-  const csvContent = [
-    'Date,Time,Blood Sugar,Unit,Reading Type,Meal Information,Notes,Comments',
-    `2026-11-15,07:30,${isMmol ? '5.2' : '94'},${unit},Fasting,,"Woke up well rested","Morning baseline"`,
-    `2026-11-15,09:30,${isMmol ? '6.8' : '122'},${unit},2 Hours After Meal,"Oatmeal with almonds & blueberries","Felt good energy","Post-breakfast check"`,
-    `2026-11-15,13:00,${isMmol ? '5.4' : '98'},${unit},Before Meal,"Pre-lunch",,`,
-    `2026-11-15,15:00,${isMmol ? '7.6' : '138'},${unit},2 Hours After Meal,"Grilled chicken salad with olive oil","Light 15 min walk after lunch",`,
-    `2026-11-15,22:15,${isMmol ? '5.8' : '105'},${unit},Random,,"Bedtime check","Normal day"`,
-  ].join('\r\n');
+  const conv = (v: number | string) => {
+    if (v === '' || typeof v !== 'number') return '';
+    return isMmol ? (v / 18.0182).toFixed(1) : String(v);
+  };
+
+  const sampleValues = [
+    { no: 1, date: '30-Oct-2026', f: 97, b: 160, l: 114, d: 134 },
+    { no: 2, date: '31-Oct-2026', f: 99, b: 90, l: 124, d: 161 },
+    { no: 3, date: '01-Nov-2026', f: 124, b: 104, l: 129, d: 137 },
+    { no: 4, date: '02-Nov-2026', f: 109, b: 116, l: 103, d: 147 },
+    { no: 5, date: '03-Nov-2026', f: 103, b: 105, l: 124, d: 154 },
+    { no: 6, date: '04-Nov-2026', f: 109, b: 108, l: 112, d: 137 },
+    { no: 7, date: '05-Nov-2026', f: 106, b: '', l: '', d: '' },
+    { no: 8, date: '06-Nov-2026', f: 95, b: 96, l: 108, d: 107 },
+    { no: 9, date: '07-Nov-2026', f: 96, b: 107, l: 108, d: 109 },
+    { no: 10, date: '08-Nov-2026', f: 95, b: 99, l: 111, d: 91 },
+    { no: 11, date: '09-Nov-2026', f: 97, b: '', l: 115, d: 112 },
+    { no: 12, date: '10-Nov-2026', f: 94, b: '', l: 111, d: 116 },
+    { no: 13, date: '11-Nov-2026', f: 98, b: '', l: 103, d: 86 },
+    { no: 14, date: '12-Nov-2026', f: 99, b: '', l: 106, d: 107 },
+    { no: 15, date: '13-Nov-2026', f: 94, b: '', l: 117, d: 109 },
+    { no: 16, date: '14-Nov-2026', f: 108, b: '', l: '', d: '' },
+    { no: 17, date: '15-Nov-2026', f: 94, b: 98, l: 114, d: '' },
+  ];
+
+  const header = `Sr. No.,Date,Fasting (${unit}),2 Hours After Breakfast (${unit}),2 Hours After Lunch (${unit}),2 Hours After Dinner (${unit})`;
+  const rows = sampleValues.map(
+    (s) => `${s.no},${s.date},${conv(s.f)},${conv(s.b)},${conv(s.l)},${conv(s.d)}`
+  );
+
+  const rangeHeader = `Test,Range (${unit})`;
+  const fRange = `Fasting (8–10 hours),${isMmol ? '3.3–5.3' : '60–95'}`;
+  const pRange = `2 hours after meal,${isMmol ? '3.9–6.9' : '70–125'}`;
+
+  const csvContent = [header, ...rows, rangeHeader, fRange, pRange].join('\r\n');
 
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `GlucoTrack_Import_Template_${unit.replace('/', '_')}.csv`;
+  a.download = `GlucoTrack_Daily_Logbook_Template_${unit.replace('/', '_')}.csv`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
-
-

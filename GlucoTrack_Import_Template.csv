@@ -1,7 +1,21 @@
-Date,Time,Blood Sugar,Unit,Reading Type,Meal Information,Notes,Comments
-2026-11-15,07:30,94,mg/dL,Fasting,,"Woke up well rested","Morning baseline"
-2026-11-15,09:30,122,mg/dL,2 Hours After Meal,"Oatmeal with almonds & blueberries","Felt good energy","Post-breakfast check"
-2026-11-15,13:00,98,mg/dL,Before Meal,"Pre-lunch",,
-2026-11-15,15:00,138,mg/dL,2 Hours After Meal,"Grilled chicken salad with olive oil","Light 15 min walk after lunch",
-2026-11-15,22:15,105,mg/dL,Random,,"Bedtime check","Normal day"
-
+Sr. No.,Date,Fasting (mg/dL),2 Hours After Breakfast (mg/dL),2 Hours After Lunch (mg/dL),2 Hours After Dinner (mg/dL)
+1,30-Oct-2026,97,160,114,134
+2,31-Oct-2026,99,90,124,161
+3,01-Nov-2026,124,104,129,137
+4,02-Nov-2026,109,116,103,147
+5,03-Nov-2026,103,105,124,154
+6,04-Nov-2026,109,108,112,137
+7,05-Nov-2026,106,,,
+8,06-Nov-2026,95,96,108,107
+9,07-Nov-2026,96,107,108,109
+10,08-Nov-2026,95,99,111,91
+11,09-Nov-2026,97,,115,112
+12,10-Nov-2026,94,,111,116
+13,11-Nov-2026,98,,103,86
+14,12-Nov-2026,99,,106,107
+15,13-Nov-2026,94,,117,109
+16,14-Nov-2026,108,,,
+17,15-Nov-2026,94,98,114,
+Test,Range (mg/dL)
+Fasting (8–10 hours),60–95
+2 hours after meal,70–125

@@ -1,5 +1,5 @@
-import { AppSettings, TargetRangeConfig } from '../types';
-import { DEFAULT_RANGES, DIABETES_MANAGEMENT_RANGES } from '../utils/analysis';
+import { AppSettings, TargetRangeConfig, TargetProfile } from '../types';
+import { DEFAULT_RANGES, DIABETES_MANAGEMENT_RANGES, TIGHT_TARGET_RANGES } from '../utils/analysis';
 
 const SETTINGS_KEY = 'gluco_track_pro_settings_v1';
 
@@ -56,12 +56,14 @@ class SettingsStorageService {
     return updated;
   }
 
-  public applyProfilePreset(profile: 'general_screening' | 'diagnosed_diabetes'): AppSettings {
+  public applyProfilePreset(profile: TargetProfile): AppSettings {
     const current = this.getSettings();
-    const newRanges: TargetRangeConfig =
-      profile === 'diagnosed_diabetes'
-        ? { ...DIABETES_MANAGEMENT_RANGES }
-        : { ...DEFAULT_RANGES };
+    let newRanges: TargetRangeConfig = { ...DEFAULT_RANGES };
+    if (profile === 'diagnosed_diabetes') {
+      newRanges = { ...DIABETES_MANAGEMENT_RANGES };
+    } else if (profile === 'tight_target') {
+      newRanges = { ...TIGHT_TARGET_RANGES };
+    }
 
     const updated: AppSettings = {
       ...current,

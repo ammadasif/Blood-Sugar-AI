@@ -9,7 +9,19 @@ export type ReadingStatus = 'normal' | 'elevated' | 'high' | 'low' | 'unspecifie
 
 export type BloodSugarUnit = 'mg/dL' | 'mmol/L';
 
-export type TargetProfile = 'general_screening' | 'diagnosed_diabetes' | 'custom';
+export type TargetProfile = 'general_screening' | 'diagnosed_diabetes' | 'tight_target' | 'custom';
+
+export interface DailyMatrixRow {
+  srNo: number;
+  date: string; // YYYY-MM-DD
+  dateDisplay: string; // e.g. 30-Oct-2026
+  fasting?: BloodSugarReading;
+  breakfast?: BloodSugarReading;
+  lunch?: BloodSugarReading;
+  dinner?: BloodSugarReading;
+  otherReadings?: BloodSugarReading[];
+  averageValue?: number;
+}
 
 export interface RangeThresholds {
   normalMax: number;

@@ -59,6 +59,110 @@ export function formatBloodSugarNumber(mgDlValue: number, unit: BloodSugarUnit):
 }
 
 /**
+ * Format date string to DD-MMM-YYYY (e.g. 30-Oct-2026)
+ */
+export function formatDateDMY(dateString: string): string {
+  if (!dateString) return '';
+  try {
+    const [year, month, day] = dateString.split('-');
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const mIdx = parseInt(month, 10) - 1;
+    if (mIdx >= 0 && mIdx < 12) {
+      return `${day}-${monthNames[mIdx]}-${year}`;
+    }
+    return dateString;
+  } catch {
+    return dateString;
+  }
+}
+
+const MONTH_MAP: Record<string, number> = {
+  jan: 1, january: 1,
+  feb: 2, february: 2,
+  mar: 3, march: 3,
+  apr: 4, april: 4,
+  may: 5,
+  jun: 6, june: 6,
+  jul: 7, july: 7,
+  aug: 8, august: 8,
+  sep: 9, september: 9,
+  oct: 10, october: 10,
+  nov: 11, november: 11,
+  dec: 12, december: 12,
+};
+
+/**
+ * Parses flexible dates like "30-Oct-2026", "01-Nov-2026", "2026-10-30", "30/10/2026"
+ * into canonical "YYYY-MM-DD".
+ */
+export function parseFlexibleDate(val: any): string | null {
+  if (!val) return null;
+  const str = String(val).trim();
+
+  // 1. Check YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    return str;
+  }
+
+  // 2. Check DD-MMM-YYYY or DD MMM YYYY or DD/MMM/YYYY (e.g. 30-Oct-2026)
+  const dmyAlpha = str.match(/^(\d{1,2})[\s\-\/\.]([A-Za-z]{3,})[\s\-\/\.](\d{2,4})$/);
+  if (dmyAlpha) {
+    const day = dmyAlpha[1].padStart(2, '0');
+    const mStr = dmyAlpha[2].toLowerCase();
+    const mon = MONTH_MAP[mStr] || MONTH_MAP[mStr.substring(0, 3)];
+    let year = dmyAlpha[3];
+    if (year.length === 2) year = `20${year}`;
+    if (mon) {
+      return `${year}-${String(mon).padStart(2, '0')}-${day}`;
+    }
+  }
+
+  // 3. Check numeric with separator DD/MM/YYYY or MM/DD/YYYY
+  const dmyNum = str.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
+  if (dmyNum) {
+    const p1 = parseInt(dmyNum[1], 10);
+    const p2 = parseInt(dmyNum[2], 10);
+    let y = dmyNum[3];
+    if (y.length === 2) y = `20${y}`;
+
+    if (p1 > 12) {
+      // Must be Day/Month/Year
+      return `${y}-${String(p2).padStart(2, '0')}-${String(p1).padStart(2, '0')}`;
+    } else if (p2 > 12) {
+      // Must be Month/Day/Year
+      return `${y}-${String(p1).padStart(2, '0')}-${String(p2).padStart(2, '0')}`;
+    } else {
+      // Default assume DD/MM/YYYY
+      return `${y}-${String(p2).padStart(2, '0')}-${String(p1).padStart(2, '0')}`;
+    }
+  }
+
+  // 4. Excel Serial date
+  const num = Number(str);
+  if (!isNaN(num) && num > 30000 && num < 70000) {
+    const epoch = new Date(Date.UTC(1899, 11, 30));
+    const d = new Date(epoch.getTime() + num * 86400000);
+    if (!isNaN(d.getTime())) {
+      const y = d.getUTCFullYear();
+      const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(d.getUTCDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+  }
+
+  // 5. Native JS Date fallback
+  const d = new Date(str);
+  if (!isNaN(d.getTime())) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
+  return null;
+}
+
+/**
  * Format a date string (YYYY-MM-DD) to a human friendly format
  */
 export function formatDate(dateString: string): string {
