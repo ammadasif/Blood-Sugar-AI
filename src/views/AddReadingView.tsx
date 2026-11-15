@@ -232,21 +232,21 @@ export const AddReadingView: React.FC = () => {
       <MedicalDisclaimer compact />
 
       {/* Entry Mode Switcher */}
-      <div className="flex items-center justify-between p-2 bg-slate-100 dark:bg-slate-800 rounded-2xl w-full sm:w-fit">
+      <div className="grid grid-cols-2 gap-1.5 p-1.5 bg-slate-100 dark:bg-slate-800 rounded-2xl w-full sm:w-fit sm:flex sm:items-center">
         <button
           type="button"
           onClick={() => {
             setEntryMode('day_matrix');
             setError(null);
           }}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition ${
+          className={`flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-bold transition ${
             entryMode === 'day_matrix'
               ? 'bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400 shadow-sm'
               : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
           }`}
         >
-          <Table className="w-4 h-4" />
-          <span>Log Full Day (Matrix Mode)</span>
+          <Table className="w-4 h-4 shrink-0" />
+          <span className="truncate">Matrix (Full Day)</span>
         </button>
 
         <button
@@ -255,14 +255,14 @@ export const AddReadingView: React.FC = () => {
             setEntryMode('single');
             setError(null);
           }}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition ${
+          className={`flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-bold transition ${
             entryMode === 'single'
               ? 'bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400 shadow-sm'
               : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
           }`}
         >
-          <PlusCircle className="w-4 h-4" />
-          <span>Single Reading Entry</span>
+          <PlusCircle className="w-4 h-4 shrink-0" />
+          <span className="truncate">Single Entry</span>
         </button>
       </div>
 

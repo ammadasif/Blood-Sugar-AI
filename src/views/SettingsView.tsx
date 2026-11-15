@@ -71,6 +71,8 @@ export const SettingsView: React.FC = () => {
     let targetRanges = DEFAULT_RANGES;
     if (newProfile === 'diagnosed_diabetes') {
       targetRanges = DIABETES_MANAGEMENT_RANGES;
+    } else if (newProfile === 'tight_target') {
+      targetRanges = TIGHT_TARGET_RANGES;
     }
     // Update local inputs
     setLowThreshold(convertFromInternal(targetRanges.lowThreshold, unit));
@@ -234,6 +236,9 @@ export const SettingsView: React.FC = () => {
               >
                 <option value="general_screening">
                   General Population Screening (Normal: Fasting 70-99, Post-meal &lt;140)
+                </option>
+                <option value="tight_target">
+                  Tight / Gestational Targets (Normal: Fasting 60-95, Post-meal 70-125)
                 </option>
                 <option value="diagnosed_diabetes">
                   Diagnosed Diabetes Management (ADA Targets: Fasting 80-130, Post-meal &lt;180)

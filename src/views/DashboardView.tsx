@@ -34,7 +34,7 @@ import {
 import { useBloodSugar } from '../context/BloodSugarContext';
 import { BloodSugarReading, ReadingType } from '../types';
 import { analyzeReading, READING_TYPE_LABELS } from '../utils/analysis';
-import { convertFromInternal, formatBloodSugar, formatDate, formatTime } from '../utils/conversions';
+import { convertFromInternal, formatBloodSugar, formatDate, formatDateDMY, formatTime } from '../utils/conversions';
 import { MedicalDisclaimer } from '../components/MedicalDisclaimer';
 import { AnalysisModal } from '../components/AnalysisModal';
 import { EditReadingModal } from '../components/EditReadingModal';
@@ -676,8 +676,8 @@ export const DashboardView: React.FC = () => {
         </div>
 
         {filteredReadings.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+          <div className="overflow-x-auto -mx-1 sm:mx-0">
+            <table className="w-full text-left text-xs min-w-[580px]">
               <thead>
                 <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 font-semibold uppercase tracking-wider">
                   <th className="py-2.5 px-3">Date & Time</th>
@@ -701,8 +701,8 @@ export const DashboardView: React.FC = () => {
                       key={r.id}
                       className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors"
                     >
-                      <td className="py-3 px-3 text-slate-700 dark:text-slate-300 font-medium">
-                        {formatDate(r.date)} <span className="text-slate-400 ml-1">{formatTime(r.time)}</span>
+                      <td className="py-3 px-3 text-slate-700 dark:text-slate-300 font-medium whitespace-nowrap">
+                        {formatDateDMY(r.date)} <span className="text-slate-400 ml-1">{formatTime(r.time)}</span>
                       </td>
                       <td className="py-3 px-3 font-bold text-sm text-slate-900 dark:text-white">
                         {formatBloodSugar(r.value, settings.unit)}

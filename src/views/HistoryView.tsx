@@ -368,7 +368,7 @@ export const HistoryView: React.FC = () => {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-center text-xs">
+              <table className="w-full text-center text-xs min-w-[700px]">
                 <thead>
                   <tr className="bg-slate-50/80 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 font-semibold uppercase tracking-wider text-[11px]">
                     <th className="py-3.5 px-3 w-16 text-center">Sr. No.</th>
@@ -420,8 +420,8 @@ export const HistoryView: React.FC = () => {
             </div>
 
             {/* Reference Range Legend matching user's template */}
-            <div className="p-4 bg-slate-50/70 dark:bg-slate-800/40 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
-              <div className="flex items-center gap-4">
+            <div className="p-4 bg-slate-50/70 dark:bg-slate-800/40 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-4">
                 <span className="font-bold text-slate-700 dark:text-slate-300">Reference Ranges:</span>
                 <span className="text-slate-600 dark:text-slate-400">
                   <strong>Fasting (8–10 hours):</strong>{' '}
@@ -434,7 +434,7 @@ export const HistoryView: React.FC = () => {
                   {convertFromInternal(settings.ranges.afterMeal2h.normalMax, settings.unit)} {settings.unit}
                 </span>
               </div>
-              <div className="flex items-center gap-2 text-[11px] text-slate-400">
+              <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
                 <span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500" /> Normal
                 <span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-500 ml-2" /> Elevated
                 <span className="inline-block w-2.5 h-2.5 rounded-full bg-rose-500 ml-2" /> High / Low
@@ -448,7 +448,7 @@ export const HistoryView: React.FC = () => {
         /* ===================================================================== */
         <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+            <table className="w-full text-left text-xs min-w-[750px]">
               <thead>
                 <tr className="bg-slate-50/80 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 font-semibold uppercase tracking-wider">
                   <th className="py-3 px-4 w-10">

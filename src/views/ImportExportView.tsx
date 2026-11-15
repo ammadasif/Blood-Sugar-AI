@@ -408,11 +408,11 @@ export const ImportExportView: React.FC = () => {
                   Standard Format
                 </span>
               </div>
-              <div className="flex items-center gap-2 pt-1">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
                 <button
                   onClick={handleExportDailyMatrixExcel}
                   disabled={readings.length === 0}
-                  className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-sm transition flex items-center gap-1.5 disabled:opacity-40"
+                  className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-sm transition flex items-center justify-center gap-1.5 disabled:opacity-40"
                 >
                   <Download className="w-3.5 h-3.5" />
                   <span>Download Excel (.xlsx)</span>
@@ -420,7 +420,7 @@ export const ImportExportView: React.FC = () => {
                 <button
                   onClick={handleExportDailyMatrixCSV}
                   disabled={readings.length === 0}
-                  className="px-3.5 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold shadow-sm hover:bg-slate-50 transition flex items-center gap-1.5 disabled:opacity-40"
+                  className="px-3.5 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold shadow-sm hover:bg-slate-50 transition flex items-center justify-center gap-1.5 disabled:opacity-40"
                 >
                   <Download className="w-3.5 h-3.5" />
                   <span>Download CSV (.csv)</span>

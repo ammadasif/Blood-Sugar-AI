@@ -9,27 +9,39 @@ import {
   AlertTriangle,
   TrendingUp,
   TrendingDown,
-  ArrowUpRight,
-  ArrowDownRight,
   Sparkles,
-  Download,
+  RotateCcw,
 } from 'lucide-react';
 import { useBloodSugar } from '../context/BloodSugarContext';
 import { BloodSugarReading, PeriodSummary } from '../types';
-import { analyzeReading, calculateEstimatedA1c, calculateVariability, READING_TYPE_LABELS } from '../utils/analysis';
-import { convertFromInternal, formatBloodSugar, formatDate, formatTime } from '../utils/conversions';
+import { analyzeReading, READING_TYPE_LABELS } from '../utils/analysis';
+import {
+  convertFromInternal,
+  formatBloodSugar,
+  formatDate,
+  formatDateDMY,
+  formatTime,
+} from '../utils/conversions';
 import { generatePDFReport } from '../services/pdfService';
 import { exportToExcel } from '../services/excelService';
 import { MedicalDisclaimer } from '../components/MedicalDisclaimer';
 
-type ReportPeriod = 'daily' | 'weekly' | 'monthly' | 'custom';
+type ReportPeriod = 'all' | 'daily' | 'weekly' | 'monthly' | 'custom';
 
 export const ReportsView: React.FC = () => {
   const { readings, settings } = useBloodSugar();
 
-  const [period, setPeriod] = useState<ReportPeriod>('monthly');
-  const [customStart, setCustomStart] = useState('');
-  const [customEnd, setCustomEnd] = useState('');
+  // Find dataset boundary dates
+  const { earliestDate, latestDate } = useMemo(() => {
+    if (readings.length === 0) return { earliestDate: '', latestDate: '' };
+    const dates = readings.map((r) => r.date).sort();
+    return { earliestDate: dates[0], latestDate: dates[dates.length - 1] };
+  }, [readings]);
+
+  // Default to 'all' if all readings fall outside the last 30 days, else 'monthly'
+  const [period, setPeriod] = useState<ReportPeriod>('all');
+  const [customStart, setCustomStart] = useState<string>('');
+  const [customEnd, setCustomEnd] = useState<string>('');
 
   // Determine current active period date range
   const { currentReadings, previousReadings, periodLabel, prevPeriodLabel } = useMemo(() => {
@@ -41,8 +53,15 @@ export const ReportsView: React.FC = () => {
     let pLabel = '';
     let prevLabel = '';
 
-    if (period === 'daily') {
-      pLabel = `Today (${formatDate(todayStr)})`;
+    if (period === 'all') {
+      current = [...readings];
+      previous = [];
+      pLabel = earliestDate && latestDate
+        ? `All Records (${formatDateDMY(earliestDate)} – ${formatDateDMY(latestDate)})`
+        : 'All Recorded Data';
+      prevLabel = 'None';
+    } else if (period === 'daily') {
+      pLabel = `Today (${formatDateDMY(todayStr)})`;
       prevLabel = 'Yesterday';
       current = readings.filter((r) => r.date === todayStr);
 
@@ -80,7 +99,9 @@ export const ReportsView: React.FC = () => {
       previous = readings.filter((r) => r.date >= sixtyStr && r.date < thirtyStr);
     } else {
       // Custom Range
-      pLabel = `Custom (${customStart || 'Start'} to ${customEnd || 'Present'})`;
+      const startDisplay = customStart ? formatDateDMY(customStart) : (earliestDate ? formatDateDMY(earliestDate) : 'Start');
+      const endDisplay = customEnd ? formatDateDMY(customEnd) : (latestDate ? formatDateDMY(latestDate) : 'Present');
+      pLabel = `Custom (${startDisplay} to ${endDisplay})`;
       prevLabel = 'Prior Equivalent Duration';
 
       current = readings.filter((r) => {
@@ -89,7 +110,7 @@ export const ReportsView: React.FC = () => {
         return true;
       });
 
-      // Calculate days in custom range
+      // Calculate days in custom range for comparison
       const s = customStart ? new Date(customStart) : new Date(now.getTime() - 30 * 86400000);
       const e = customEnd ? new Date(customEnd) : now;
       const days = Math.max(1, Math.round((e.getTime() - s.getTime()) / 86400000));
@@ -106,7 +127,7 @@ export const ReportsView: React.FC = () => {
       periodLabel: pLabel,
       prevPeriodLabel: prevLabel,
     };
-  }, [readings, period, customStart, customEnd]);
+  }, [readings, period, customStart, customEnd, earliestDate, latestDate]);
 
   // Generate Period Summary metrics
   const currentSummary: PeriodSummary = useMemo(() => {
@@ -134,34 +155,32 @@ export const ReportsView: React.FC = () => {
     }
 
     const fasting = currentReadings.filter((r) => r.type === 'fasting');
-    const postMeal = currentReadings.filter((r) => r.type === '2h_after_meal' || r.type === '1h_after_meal');
+    const postMeal = currentReadings.filter(
+      (r) => r.type === '2h_after_meal' || r.type === '1h_after_meal'
+    );
 
     const avgOverall = Math.round(currentReadings.reduce((s, r) => s + r.value, 0) / totalCount);
-    const avgFasting = fasting.length ? Math.round(fasting.reduce((s, r) => s + r.value, 0) / fasting.length) : 0;
+    const avgFasting = fasting.length
+      ? Math.round(fasting.reduce((s, r) => s + r.value, 0) / fasting.length)
+      : 0;
     const avgPostMeal = postMeal.length
       ? Math.round(postMeal.reduce((s, r) => s + r.value, 0) / postMeal.length)
       : 0;
 
-    let highest = currentReadings[0];
-    let lowest = currentReadings[0];
     let normalCount = 0;
     let elevatedCount = 0;
     let highCount = 0;
     let lowCount = 0;
 
     currentReadings.forEach((r) => {
-      if (r.value > highest.value) highest = r;
-      if (r.value < lowest.value) lowest = r;
-
-      const analysis = analyzeReading(r, settings);
-      if (analysis.status === 'normal') normalCount++;
-      else if (analysis.status === 'elevated') elevatedCount++;
-      else if (analysis.status === 'high') highCount++;
-      else if (analysis.status === 'low') lowCount++;
+      const a = analyzeReading(r, settings);
+      if (a.status === 'normal') normalCount++;
+      else if (a.status === 'elevated') elevatedCount++;
+      else if (a.status === 'high') highCount++;
+      else if (a.status === 'low') lowCount++;
     });
 
-    const variability = calculateVariability(currentReadings.map((r) => r.value));
-    const estimatedA1c = calculateEstimatedA1c(avgOverall);
+    const sortedByVal = [...currentReadings].sort((a, b) => b.value - a.value);
 
     return {
       periodLabel,
@@ -169,8 +188,8 @@ export const ReportsView: React.FC = () => {
       averageOverall: avgOverall,
       averageFasting: avgFasting,
       averagePostMeal: avgPostMeal,
-      highest: { value: highest.value, date: highest.date, time: highest.time },
-      lowest: { value: lowest.value, date: lowest.date, time: lowest.time },
+      highest: sortedByVal[0] || null,
+      lowest: sortedByVal[sortedByVal.length - 1] || null,
       normalCount,
       elevatedCount,
       highCount,
@@ -181,49 +200,43 @@ export const ReportsView: React.FC = () => {
       lowPercentage: Math.round((lowCount / totalCount) * 100),
       fastingCount: fasting.length,
       postMealCount: postMeal.length,
-      estimatedA1c: estimatedA1c || undefined,
-      variabilitySD: variability?.sd,
-      variabilityCV: variability?.cv,
     };
   }, [currentReadings, periodLabel, settings]);
 
-  // Previous period comparison calculation
+  // Comparison vs. Prior Period
   const comparison = useMemo(() => {
-    if (previousReadings.length === 0 || currentReadings.length === 0) return null;
+    if (previousReadings.length === 0 || currentSummary.totalCount === 0) return null;
     const prevAvg = Math.round(
       previousReadings.reduce((s, r) => s + r.value, 0) / previousReadings.length
     );
     const diff = currentSummary.averageOverall - prevAvg;
     const pctChange = ((diff / prevAvg) * 100).toFixed(1);
+    const trend = diff < -2 ? 'down' : diff > 2 ? 'up' : 'steady';
 
-    return {
-      prevAvg,
-      diff,
-      pctChange,
-      trend: diff > 2 ? ('up' as const) : diff < -2 ? ('down' as const) : ('same' as const),
-    };
-  }, [previousReadings, currentReadings, currentSummary.averageOverall]);
+    return { prevAvg, diff, pctChange, trend };
+  }, [previousReadings, currentSummary]);
 
-  // Automated Clinical Commentary Generation
+  // Automated commentary
   const clinicalCommentary = useMemo(() => {
     if (currentSummary.totalCount === 0) {
-      return 'No readings recorded within this selected time window to evaluate.';
+      return 'No readings recorded for the selected timeframe. Record blood sugar readings or broaden your date range to generate a clinical analysis.';
     }
 
     const comments: string[] = [];
+
     if (currentSummary.normalPercentage >= 70) {
       comments.push(
-        `Excellent glycemic control: ${currentSummary.normalPercentage}% of your readings are within the normal reference range.`
+        `Glycemic stability is strong with ${currentSummary.normalPercentage}% of readings falling within target reference ranges.`
       );
     } else if (currentSummary.normalPercentage >= 50) {
       comments.push(
-        `Moderate glycemic control with ${currentSummary.normalPercentage}% normal readings. ${currentSummary.elevatedPercentage}% of readings fall in the elevated/borderline zone.`
+        `Moderate glycemic control observed with ${currentSummary.normalPercentage}% within normal targets; ${
+          currentSummary.elevatedPercentage + currentSummary.highPercentage
+        }% were elevated or high.`
       );
     } else {
       comments.push(
-        `Attention recommended: only ${currentSummary.normalPercentage}% of readings are in target. Elevated and high readings make up ${
-          currentSummary.elevatedPercentage + currentSummary.highPercentage
-        }% of entries.`
+        `High variability noted; only ${currentSummary.normalPercentage}% of readings were within target ranges. Clinical review recommended.`
       );
     }
 
@@ -271,6 +284,14 @@ export const ReportsView: React.FC = () => {
     return comments.join(' ');
   }, [currentSummary, comparison, prevPeriodLabel, settings.unit]);
 
+  const handleFitToDataRange = () => {
+    if (earliestDate && latestDate) {
+      setCustomStart(earliestDate);
+      setCustomEnd(latestDate);
+      setPeriod('custom');
+    }
+  };
+
   // Actions
   const handleDownloadPDF = () => {
     if (currentReadings.length === 0) return;
@@ -291,88 +312,126 @@ export const ReportsView: React.FC = () => {
       <MedicalDisclaimer compact />
 
       {/* Report Period Selector & Action Toolbar */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-5 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4 print:hidden">
-        <div className="flex items-center gap-2">
-          <Calendar className="w-5 h-5 text-blue-600" />
-          <div>
-            <h3 className="text-sm font-bold text-slate-900 dark:text-white">Reporting Timeframe</h3>
-            <p className="text-xs text-slate-400">Select aggregation window</p>
+      <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-4 sm:p-5 shadow-sm space-y-4 print:hidden">
+        <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <Calendar className="w-5 h-5 text-blue-600" />
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white">Reporting Timeframe</h3>
+              <p className="text-xs text-slate-400">Select aggregation window or custom range</p>
+            </div>
+          </div>
+
+          {/* Period Pills */}
+          <div className="flex flex-wrap items-center gap-1.5 w-full lg:w-auto">
+            {[
+              { id: 'all', label: 'All Records' },
+              { id: 'daily', label: 'Daily (Today)' },
+              { id: 'weekly', label: 'Weekly (Last 7 Days)' },
+              { id: 'monthly', label: 'Monthly (Last 30 Days)' },
+              { id: 'custom', label: 'Custom Range' },
+            ].map((item) => (
+              <button
+                key={item.id}
+                onClick={() => setPeriod(item.id as ReportPeriod)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
+                  period === item.id
+                    ? 'bg-blue-600 text-white shadow-sm shadow-blue-500/20'
+                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Action Export Buttons */}
+          <div className="grid grid-cols-3 sm:flex items-center gap-2 w-full lg:w-auto">
+            <button
+              onClick={handleDownloadExcel}
+              disabled={currentReadings.length === 0}
+              className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm flex items-center justify-center gap-1.5 transition disabled:opacity-40"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              <span>Excel</span>
+            </button>
+
+            <button
+              onClick={handleDownloadPDF}
+              disabled={currentReadings.length === 0}
+              className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-sm flex items-center justify-center gap-1.5 transition disabled:opacity-40"
+            >
+              <FileText className="w-4 h-4" />
+              <span>PDF</span>
+            </button>
+
+            <button
+              onClick={handlePrint}
+              disabled={currentReadings.length === 0}
+              title="Print Report"
+              className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 transition flex items-center justify-center gap-1.5 disabled:opacity-40"
+            >
+              <Printer className="w-4 h-4" />
+              <span className="sm:hidden">Print</span>
+            </button>
           </div>
         </div>
 
-        {/* Period Pills */}
-        <div className="flex flex-wrap items-center gap-1.5">
-          {[
-            { id: 'daily', label: 'Daily (Today)' },
-            { id: 'weekly', label: 'Weekly (Last 7 Days)' },
-            { id: 'monthly', label: 'Monthly (Last 30 Days)' },
-            { id: 'custom', label: 'Custom Range' },
-          ].map((item) => (
-            <button
-              key={item.id}
-              onClick={() => setPeriod(item.id as ReportPeriod)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
-                period === item.id
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-              }`}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
+        {/* Custom Date Range Panel */}
+        {period === 'custom' && (
+          <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 text-xs animate-fade-in">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-blue-500" />
+                Select Custom Dates:
+              </span>
+              <div className="flex items-center gap-1.5 w-full sm:w-auto">
+                <input
+                  type="date"
+                  value={customStart}
+                  onChange={(e) => setCustomStart(e.target.value)}
+                  className="px-2.5 py-1.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 text-xs w-full sm:w-auto"
+                />
+                <span className="text-slate-400">to</span>
+                <input
+                  type="date"
+                  value={customEnd}
+                  onChange={(e) => setCustomEnd(e.target.value)}
+                  className="px-2.5 py-1.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 text-xs w-full sm:w-auto"
+                />
+              </div>
+            </div>
 
-        {/* Action Export Buttons */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleDownloadExcel}
-            disabled={currentReadings.length === 0}
-            className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm flex items-center gap-1.5 transition disabled:opacity-40"
-          >
-            <FileSpreadsheet className="w-4 h-4" />
-            <span>Excel</span>
-          </button>
-
-          <button
-            onClick={handleDownloadPDF}
-            disabled={currentReadings.length === 0}
-            className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-sm flex items-center gap-1.5 transition disabled:opacity-40"
-          >
-            <FileText className="w-4 h-4" />
-            <span>PDF Report</span>
-          </button>
-
-          <button
-            onClick={handlePrint}
-            disabled={currentReadings.length === 0}
-            className="px-3 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 transition disabled:opacity-40"
-          >
-            <Printer className="w-4 h-4" />
-          </button>
-        </div>
+            <div className="flex items-center gap-2">
+              {earliestDate && latestDate && (
+                <button
+                  type="button"
+                  onClick={handleFitToDataRange}
+                  className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold transition"
+                >
+                  Fit to Dataset ({formatDateDMY(earliestDate)} - {formatDateDMY(latestDate)})
+                </button>
+              )}
+              {(customStart || customEnd) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustomStart('');
+                    setCustomEnd('');
+                  }}
+                  className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                  title="Clear custom dates"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
-      {period === 'custom' && (
-        <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl p-4 shadow-sm flex items-center gap-3 text-xs print:hidden">
-          <span className="font-semibold text-slate-600 dark:text-slate-300">Custom Dates:</span>
-          <input
-            type="date"
-            value={customStart}
-            onChange={(e) => setCustomStart(e.target.value)}
-            className="px-3 py-1.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200"
-          />
-          <span className="text-slate-400">to</span>
-          <input
-            type="date"
-            value={customEnd}
-            onChange={(e) => setCustomEnd(e.target.value)}
-            className="px-3 py-1.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200"
-          />
-        </div>
-      )}
-
       {/* Printable Report Document Card */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-6 sm:p-8 shadow-sm space-y-6 print:shadow-none print:border-none print:p-0">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-5 sm:p-8 shadow-sm space-y-6 print:shadow-none print:border-none print:p-0">
         {/* Report Header */}
         <div className="border-b border-slate-100 dark:border-slate-800 pb-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
@@ -411,7 +470,7 @@ export const ReportsView: React.FC = () => {
         </div>
 
         {/* Key Metrics Grid */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
           <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800 space-y-1">
             <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Total Readings</span>
             <p className="text-2xl font-extrabold text-slate-900 dark:text-white">{currentSummary.totalCount}</p>
@@ -425,7 +484,7 @@ export const ReportsView: React.FC = () => {
             <p className="text-2xl font-extrabold text-emerald-600 dark:text-emerald-400">
               {currentSummary.averageFasting ? formatBloodSugar(currentSummary.averageFasting, settings.unit) : 'N/A'}
             </p>
-            <p className="text-[11px] text-slate-400">Normal Ref: &lt; 100 mg/dL</p>
+            <p className="text-[11px] text-slate-400">Ref: &lt; 100 mg/dL</p>
           </div>
 
           <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800 space-y-1">
@@ -433,17 +492,17 @@ export const ReportsView: React.FC = () => {
             <p className="text-2xl font-extrabold text-indigo-600 dark:text-indigo-400">
               {currentSummary.averagePostMeal ? formatBloodSugar(currentSummary.averagePostMeal, settings.unit) : 'N/A'}
             </p>
-            <p className="text-[11px] text-slate-400">Normal Ref: &lt; 140 mg/dL</p>
+            <p className="text-[11px] text-slate-400">Ref: &lt; 140 mg/dL</p>
           </div>
 
           <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800 space-y-1">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Period Extreme Values</span>
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Extreme Values</span>
             <div className="flex items-baseline gap-2">
-              <span className="text-sm font-bold text-rose-600">
+              <span className="text-xs font-bold text-rose-600">
                 Max: {currentSummary.highest ? formatBloodSugar(currentSummary.highest.value, settings.unit) : '—'}
               </span>
             </div>
-            <span className="text-sm font-bold text-teal-600 block">
+            <span className="text-xs font-bold text-teal-600 block">
               Min: {currentSummary.lowest ? formatBloodSugar(currentSummary.lowest.value, settings.unit) : '—'}
             </span>
           </div>
@@ -526,11 +585,17 @@ export const ReportsView: React.FC = () => {
 
         {/* Tabular List of Readings in Report */}
         <div className="space-y-3">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-            Readings Recorded in Period ({currentReadings.length})
-          </h4>
-          <div className="overflow-x-auto border border-slate-100 dark:border-slate-800 rounded-2xl">
-            <table className="w-full text-left text-xs">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+              Readings Recorded in Period ({currentReadings.length})
+            </h4>
+            <span className="text-[11px] text-slate-400 hidden sm:inline">
+              Swipe horizontally to inspect all details
+            </span>
+          </div>
+
+          <div className="overflow-x-auto border border-slate-100 dark:border-slate-800 rounded-2xl -mx-1 sm:mx-0">
+            <table className="w-full text-left text-xs min-w-[560px]">
               <thead>
                 <tr className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-100 dark:border-slate-800 text-slate-500 font-semibold">
                   <th className="py-2.5 px-3">Date</th>
@@ -542,35 +607,45 @@ export const ReportsView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {currentReadings.map((r) => {
-                  const a = analyzeReading(r, settings);
-                  return (
-                    <tr key={r.id}>
-                      <td className="py-2.5 px-3">{formatDate(r.date)}</td>
-                      <td className="py-2.5 px-3 text-slate-400">{formatTime(r.time)}</td>
-                      <td className="py-2.5 px-3 font-bold text-slate-900 dark:text-white">
-                        {formatBloodSugar(r.value, settings.unit)}
-                      </td>
-                      <td className="py-2.5 px-3">{READING_TYPE_LABELS[r.type]}</td>
-                      <td className="py-2.5 px-3">
-                        <span
-                          className={`font-semibold ${
-                            a.status === 'normal'
-                              ? 'text-emerald-600'
-                              : a.status === 'elevated'
-                              ? 'text-amber-600'
-                              : 'text-rose-600'
-                          }`}
-                        >
-                          {a.label}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 text-slate-500 truncate max-w-xs">
-                        {r.mealInfo || r.notes || '—'}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {currentReadings.length > 0 ? (
+                  currentReadings.map((r) => {
+                    const a = analyzeReading(r, settings);
+                    return (
+                      <tr key={r.id}>
+                        <td className="py-2.5 px-3 whitespace-nowrap font-medium text-slate-900 dark:text-white">
+                          {formatDateDMY(r.date)}
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-400 whitespace-nowrap">{formatTime(r.time)}</td>
+                        <td className="py-2.5 px-3 font-bold text-slate-900 dark:text-white whitespace-nowrap">
+                          {formatBloodSugar(r.value, settings.unit)}
+                        </td>
+                        <td className="py-2.5 px-3 whitespace-nowrap">{READING_TYPE_LABELS[r.type]}</td>
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <span
+                            className={`font-semibold ${
+                              a.status === 'normal'
+                                ? 'text-emerald-600'
+                                : a.status === 'elevated'
+                                ? 'text-amber-600'
+                                : 'text-rose-600'
+                            }`}
+                          >
+                            {a.label}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-500 truncate max-w-xs">
+                          {r.mealInfo || r.notes || '—'}
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={6} className="py-8 text-center text-xs text-slate-400">
+                      No readings found for the selected timeframe.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -584,4 +659,3 @@ export const ReportsView: React.FC = () => {
     </div>
   );
 };
-

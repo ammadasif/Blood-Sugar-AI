@@ -55,7 +55,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
           <Menu className="w-5 h-5" />
         </button>
         <div>
-          <h2 className="text-lg font-bold text-slate-900 dark:text-white tracking-tight">{title}</h2>
+          <h2 className="text-sm sm:text-lg font-bold text-slate-900 dark:text-white tracking-tight truncate max-w-[150px] xs:max-w-[200px] sm:max-w-none">{title}</h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 hidden sm:block">{subtitle}</p>
         </div>
       </div>
