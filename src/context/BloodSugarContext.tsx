@@ -26,11 +26,15 @@ interface BloodSugarContextType {
   markBackupCompleted: () => void;
 
   // User Account & Profile
-  loginUser: (username: string, displayName?: string) => UserProfile;
+  loginUser: (username: string, displayName?: string, autoFetchBackend?: boolean) => Promise<UserProfile>;
   logoutUser: () => void;
-  switchProfile: (username: string) => void;
+  switchProfile: (username: string, autoFetchBackend?: boolean) => Promise<void>;
 
-  // File-Based Database (Excel / JSON / Text)
+  // Backend File Automatic Sync
+  loadUserFromBackend: (targetUser?: string) => Promise<{ success: boolean; message: string; count?: number }>;
+  saveBackendJson: (username?: string) => void;
+
+  // File-Based Database (Save / Load File)
   saveDataToFile: (format?: 'excel' | 'json') => void;
   loadDataFromFile: (file: File) => Promise<{ count: number; format: string }>;
 
@@ -76,7 +80,26 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   // Initial load
   useEffect(() => {
-    reloadData();
+    const init = async () => {
+      await reloadData();
+
+      // If user is already signed in and has 0 readings locally, auto-fetch from backend!
+      const current = settingsService.getSettings();
+      if (current.currentUser?.username) {
+        const localReadings = await dbService.getAllReadings();
+        if (localReadings.length === 0) {
+          const res = await userService.fetchUserFromBackend(
+            current.currentUser.username,
+            current.firebaseDbUrl
+          );
+          if (res.success && res.readings && res.readings.length > 0) {
+            await dbService.bulkAddReadings(res.readings);
+            await reloadData();
+          }
+        }
+      }
+    };
+    init();
   }, [reloadData]);
 
   const toggleTheme = () => {
@@ -96,9 +119,40 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   };
 
   // ───────────────────────────────────────────────
+  // BACKEND FILE AUTO-SYNC
+  // ───────────────────────────────────────────────
+  const loadUserFromBackend = async (
+    targetUser?: string
+  ): Promise<{ success: boolean; message: string; count?: number }> => {
+    const userToLoad = targetUser || settings.currentUser?.username;
+    if (!userToLoad) {
+      return { success: false, message: 'Please enter a username.' };
+    }
+
+    const res = await userService.fetchUserFromBackend(userToLoad, settings.firebaseDbUrl);
+    if (res.success && res.readings && res.readings.length > 0) {
+      await dbService.clearAllReadings();
+      await dbService.bulkAddReadings(res.readings);
+      await reloadData();
+      return { success: true, message: res.message, count: res.readings.length };
+    }
+    return { success: false, message: res.message };
+  };
+
+  const saveBackendJson = (username?: string) => {
+    const user = username || settings.currentUser?.username || 'ammad';
+    const display = settings.currentUser?.displayName || user;
+    userService.saveBackendJsonFile(readings, user, display);
+  };
+
+  // ───────────────────────────────────────────────
   // USER PROFILE & ACCOUNT
   // ───────────────────────────────────────────────
-  const loginUser = (username: string, displayName?: string): UserProfile => {
+  const loginUser = async (
+    username: string,
+    displayName?: string,
+    autoFetchBackend: boolean = true
+  ): Promise<UserProfile> => {
     const currentList = settings.savedUsers || [];
     const { user, updatedUsers } = userService.createOrLogin(username, displayName, currentList);
 
@@ -107,6 +161,11 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       savedUsers: updatedUsers,
     });
     setSettings(updated);
+
+    if (autoFetchBackend) {
+      await loadUserFromBackend(user.username);
+    }
+
     return user;
   };
 
@@ -117,13 +176,17 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setSettings(updated);
   };
 
-  const switchProfile = (username: string) => {
+  const switchProfile = async (username: string, autoFetchBackend: boolean = true) => {
     const target = (settings.savedUsers || []).find((u) => u.username === username);
     if (target) {
       const updated = settingsService.updateSettings({
         currentUser: { ...target, lastLoginAt: Date.now() },
       });
       setSettings(updated);
+
+      if (autoFetchBackend) {
+        await loadUserFromBackend(target.username);
+      }
     }
   };
 
@@ -189,7 +252,6 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     await dbService.addReading(newRecord, settings.storageLimit, settings.autoDeleteOldReadings);
     await reloadData();
 
-    // Auto-sync with Firebase if configured
     if (settings.firebaseDbUrl) {
       syncWithFirebaseCloud('push').catch(() => {});
     }
@@ -282,6 +344,8 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         loginUser,
         logoutUser,
         switchProfile,
+        loadUserFromBackend,
+        saveBackendJson,
         saveDataToFile,
         loadDataFromFile,
         syncWithFirebaseCloud,

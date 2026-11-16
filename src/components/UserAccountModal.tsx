@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Sparkles,
   AlertCircle,
+  FileCheck2,
 } from 'lucide-react';
 import { useBloodSugar } from '../context/BloodSugarContext';
 
@@ -33,11 +34,14 @@ export const UserAccountModal: React.FC<UserAccountModalProps> = ({ isOpen, onCl
     readings,
     saveDataToFile,
     loadDataFromFile,
+    loadUserFromBackend,
+    saveBackendJson,
     syncWithFirebaseCloud,
   } = useBloodSugar();
 
   const [usernameInput, setUsernameInput] = useState('');
   const [displayNameInput, setDisplayNameInput] = useState('');
+  const [autoFetchBackend, setAutoFetchBackend] = useState(true);
   const [activeTab, setActiveTab] = useState<'profile' | 'files' | 'cloud'>('profile');
   const [feedback, setFeedback] = useState<{ text: string; ok: boolean } | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -46,20 +50,49 @@ export const UserAccountModal: React.FC<UserAccountModalProps> = ({ isOpen, onCl
 
   if (!isOpen) return null;
 
-  const handleSignIn = (e: React.FormEvent) => {
+  const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!usernameInput.trim()) {
       setFeedback({ text: 'Please enter a username.', ok: false });
       return;
     }
 
+    setIsProcessing(true);
+    setFeedback(null);
     try {
-      loginUser(usernameInput, displayNameInput || undefined);
-      setFeedback({ text: `Signed in as ${displayNameInput || usernameInput}!`, ok: true });
+      const user = await loginUser(usernameInput, displayNameInput || undefined, autoFetchBackend);
+      setFeedback({
+        text: `Signed in as ${user.displayName}! ${autoFetchBackend ? 'Checked backend file.' : ''}`,
+        ok: true,
+      });
       setUsernameInput('');
       setDisplayNameInput('');
     } catch (err: any) {
       setFeedback({ text: err?.message || 'Login failed', ok: false });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleLoadBackendDirectly = async (targetUser?: string) => {
+    const userToLoad = targetUser || currentUser?.username || usernameInput.trim();
+    if (!userToLoad) {
+      setFeedback({ text: 'Please enter a username first.', ok: false });
+      return;
+    }
+
+    setIsProcessing(true);
+    setFeedback(null);
+    try {
+      const res = await loadUserFromBackend(userToLoad);
+      setFeedback({
+        text: res.message,
+        ok: res.success,
+      });
+    } catch (err: any) {
+      setFeedback({ text: err?.message || 'Failed to load from backend.', ok: false });
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -72,6 +105,19 @@ export const UserAccountModal: React.FC<UserAccountModalProps> = ({ isOpen, onCl
       });
     } catch (err: any) {
       setFeedback({ text: err?.message || 'Save failed', ok: false });
+    }
+  };
+
+  const handleSaveBackendFile = () => {
+    try {
+      const user = currentUser?.username || 'ammad';
+      saveBackendJson(user);
+      setFeedback({
+        text: `Saved backend file '${user}.json' with ${readings.length} readings!`,
+        ok: true,
+      });
+    } catch (err: any) {
+      setFeedback({ text: err?.message || 'Failed to save backend JSON.', ok: false });
     }
   };
 
@@ -125,7 +171,7 @@ export const UserAccountModal: React.FC<UserAccountModalProps> = ({ isOpen, onCl
             </div>
             <div>
               <h3 className="text-base font-bold text-slate-900 dark:text-white">User Account & Data</h3>
-              <p className="text-xs text-slate-400">Manage user profiles and file-based data records</p>
+              <p className="text-xs text-slate-400">Sign in to load your backend data records on any device</p>
             </div>
           </div>
           <button
@@ -183,7 +229,7 @@ export const UserAccountModal: React.FC<UserAccountModalProps> = ({ isOpen, onCl
             }`}
           >
             <FileSpreadsheet className="w-3.5 h-3.5" />
-            Data Files (Save/Load)
+            Data Files & Backend
           </button>
 
           {settings.firebaseDbUrl && (
@@ -209,7 +255,7 @@ export const UserAccountModal: React.FC<UserAccountModalProps> = ({ isOpen, onCl
           <div className="space-y-4 animate-fade-in">
             {/* Active User Status */}
             {currentUser ? (
-              <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-50 to-indigo-50/60 dark:from-slate-800/80 dark:to-slate-800/40 border border-blue-100 dark:border-slate-700 flex items-center justify-between">
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-50 to-indigo-50/60 dark:from-slate-800/80 dark:to-slate-800/40 border border-blue-100 dark:border-slate-700 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-2xl bg-blue-600 text-white font-extrabold flex items-center justify-center text-sm shadow-md shadow-blue-500/20">
                     {currentUser.displayName.charAt(0).toUpperCase()}
@@ -224,22 +270,37 @@ export const UserAccountModal: React.FC<UserAccountModalProps> = ({ isOpen, onCl
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={logoutUser}
-                  className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-slate-700 hover:text-rose-600 dark:text-slate-300 dark:hover:text-rose-400 text-xs font-semibold border border-slate-200 dark:border-slate-600 transition flex items-center gap-1"
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                  <span>Sign Out</span>
-                </button>
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <button
+                    type="button"
+                    onClick={() => handleLoadBackendDirectly(currentUser.username)}
+                    disabled={isProcessing}
+                    className="flex-1 sm:flex-initial px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-sm transition flex items-center justify-center gap-1.5 disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isProcessing ? 'animate-spin' : ''}`} />
+                    <span>Sync from Backend</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={logoutUser}
+                    className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-slate-700 hover:text-rose-600 dark:text-slate-300 dark:hover:text-rose-400 text-xs font-semibold border border-slate-200 dark:border-slate-600 transition flex items-center gap-1"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    <span>Sign Out</span>
+                  </button>
+                </div>
               </div>
             ) : (
-              <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300">
-                You are currently working in <strong>Guest Mode</strong>. Sign in below to attach readings to your personal profile.
+              <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300 flex items-center justify-between">
+                <div>
+                  You are currently in <strong>Guest Mode</strong>.
+                  <p className="text-[11px] text-slate-400">Sign in with your username to auto-load your backend records.</p>
+                </div>
               </div>
             )}
 
-            {/* Sign In / Create Profile Form */}
+            {/* Sign In / Switch Account Form */}
             <form onSubmit={handleSignIn} className="space-y-3 pt-1">
               <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
                 {currentUser ? 'Switch or Add Another Account' : 'Sign In with Username'}
@@ -247,7 +308,19 @@ export const UserAccountModal: React.FC<UserAccountModalProps> = ({ isOpen, onCl
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <div>
-                  <label className="text-[11px] font-semibold text-slate-500">Username *</label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-semibold text-slate-500">Username *</label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUsernameInput('ammad');
+                        if (!displayNameInput) setDisplayNameInput('Ammad Asif');
+                      }}
+                      className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline font-semibold"
+                    >
+                      Use 'ammad'
+                    </button>
+                  </div>
                   <input
                     type="text"
                     value={usernameInput}
@@ -270,13 +343,41 @@ export const UserAccountModal: React.FC<UserAccountModalProps> = ({ isOpen, onCl
                 </div>
               </div>
 
-              <button
-                type="submit"
-                className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm shadow-blue-500/20"
-              >
-                <LogIn className="w-4 h-4" />
-                <span>{currentUser ? 'Switch / Add Account' : 'Sign In'}</span>
-              </button>
+              {/* Auto-Load Checkbox */}
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="auto-fetch-backend-checkbox"
+                  checked={autoFetchBackend}
+                  onChange={(e) => setAutoFetchBackend(e.target.checked)}
+                  className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 cursor-pointer"
+                />
+                <label htmlFor="auto-fetch-backend-checkbox" className="text-xs text-slate-700 dark:text-slate-300 font-medium cursor-pointer">
+                  Auto-load records from backend file (<code className="font-mono text-blue-600 dark:text-blue-400 font-bold">{usernameInput || 'username'}.json</code>)
+                </label>
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  type="submit"
+                  disabled={isProcessing}
+                  className="flex-1 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm shadow-blue-500/20 disabled:opacity-50"
+                >
+                  <LogIn className="w-4 h-4" />
+                  <span>{isProcessing ? 'Signing In...' : currentUser ? 'Switch Account' : 'Sign In & Load Data'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleLoadBackendDirectly(usernameInput)}
+                  disabled={isProcessing || !usernameInput.trim()}
+                  title="Directly load data from backend JSON file for this username"
+                  className="px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold transition flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <FileCheck2 className="w-4 h-4 text-emerald-500" />
+                  <span>Load from File</span>
+                </button>
+              </div>
             </form>
 
             {/* Saved Accounts List */}
@@ -329,24 +430,35 @@ export const UserAccountModal: React.FC<UserAccountModalProps> = ({ isOpen, onCl
           </div>
         )}
 
-        {/* ─── TAB 2: DATA FILES (SAVE / LOAD) ─── */}
+        {/* ─── TAB 2: DATA FILES & BACKEND ─── */}
         {activeTab === 'files' && (
           <div className="space-y-4 animate-fade-in">
-            <div className="p-3.5 bg-blue-50/80 dark:bg-blue-950/40 rounded-2xl border border-blue-100 dark:border-blue-900 space-y-1">
-              <h4 className="text-xs font-bold text-blue-900 dark:text-blue-300 flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-                Cross-Platform File Portability
+            {/* Backend File Info */}
+            <div className="p-3.5 bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/40 dark:to-teal-950/30 rounded-2xl border border-emerald-100 dark:border-emerald-900 space-y-1.5">
+              <h4 className="text-xs font-bold text-emerald-900 dark:text-emerald-300 flex items-center gap-1.5">
+                <FileCheck2 className="w-4 h-4 text-emerald-600" />
+                Backend JSON File Integration
               </h4>
-              <p className="text-[11px] text-blue-700 dark:text-blue-400 leading-relaxed">
-                Save your data file on Laptop and open it on Mobile, or vice-versa. All reports, analysis, TIR charts, and HbA1c are calculated directly from this file.
+              <p className="text-[11px] text-emerald-800 dark:text-emerald-400 leading-relaxed">
+                When you sign in on Mobile or Laptop with username <code className="font-bold">ammad</code>, the app automatically loads <code className="font-bold">ammad.json</code> from the backend server!
               </p>
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={handleSaveBackendFile}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download Backend File ({currentUser?.username || 'ammad'}.json)</span>
+                </button>
+              </div>
             </div>
 
             {/* Save Data File Section */}
             <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-3">
               <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-white">
                 <Download className="w-4 h-4 text-emerald-500" />
-                <span>Save / Export Data File ({readings.length} readings)</span>
+                <span>Save Database File ({readings.length} readings)</span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">

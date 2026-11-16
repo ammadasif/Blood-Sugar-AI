@@ -3,7 +3,7 @@ import { exportToDailyMatrixExcel, parseExcelFile } from './excelService';
 import { exportJSONBackup, parseJSONBackup, downloadFile } from './backupService';
 
 export class UserService {
-  private sanitizeUsername(input: string): string {
+  public sanitizeUsername(input: string): string {
     return (input || '')
       .trim()
       .toLowerCase()
@@ -50,8 +50,98 @@ export class UserService {
   }
 
   /**
+   * Automatically loads the user's backend JSON file from server/GitHub Pages/Firebase
+   * Without the user having to manually export/import anything!
+   */
+  public async fetchUserFromBackend(
+    username: string,
+    firebaseDbUrl?: string
+  ): Promise<{
+    success: boolean;
+    readings?: BloodSugarReading[];
+    message: string;
+    source?: string;
+  }> {
+    const cleanUser = this.sanitizeUsername(username);
+    if (!cleanUser) {
+      return { success: false, message: 'Invalid username.' };
+    }
+
+    const candidateUrls: { name: string; url: string }[] = [];
+    const timestamp = Date.now();
+
+    // 1. If Firebase DB is configured
+    if (firebaseDbUrl && firebaseDbUrl.startsWith('http')) {
+      const cleanBase = firebaseDbUrl.replace(/\/+$/, '');
+      candidateUrls.push({
+        name: 'Firebase Cloud Database',
+        url: `${cleanBase}/users/${cleanUser}.json?t=${timestamp}`,
+      });
+    }
+
+    // 2. Relative site URL based on current page directory
+    try {
+      const docPath = window.location.pathname;
+      const cleanDir = docPath.substring(0, docPath.lastIndexOf('/') + 1) || '/';
+      candidateUrls.push({
+        name: 'Site Backend File',
+        url: `${window.location.origin}${cleanDir}data/users/${cleanUser}.json?t=${timestamp}`,
+      });
+    } catch {
+      // Fallback relative
+    }
+
+    // 3. Explicit GitHub Pages deployment URL
+    candidateUrls.push({
+      name: 'GitHub Pages Backend',
+      url: `https://ammadasif.github.io/Blood-Sugar-AI/data/users/${cleanUser}.json?t=${timestamp}`,
+    });
+
+    // 4. Raw GitHub fallback (CORS friendly, guaranteed live upon git push)
+    candidateUrls.push({
+      name: 'GitHub Repository Backend',
+      url: `https://raw.githubusercontent.com/ammadasif/Blood-Sugar-AI/main/public/data/users/${cleanUser}.json?t=${timestamp}`,
+    });
+
+    // 5. Root path fallback
+    candidateUrls.push({
+      name: 'Root Path Fallback',
+      url: `/data/users/${cleanUser}.json?t=${timestamp}`,
+    });
+
+    for (const candidate of candidateUrls) {
+      try {
+        const res = await fetch(candidate.url, { cache: 'no-cache' });
+        if (res.ok) {
+          const data = await res.json();
+          const readings: BloodSugarReading[] = Array.isArray(data)
+            ? data
+            : Array.isArray(data?.readings)
+            ? data.readings
+            : [];
+
+          if (readings.length > 0) {
+            return {
+              success: true,
+              readings,
+              message: `Retrieved ${readings.length} readings from backend file for user '${cleanUser}'!`,
+              source: candidate.name,
+            };
+          }
+        }
+      } catch (e) {
+        // Try next candidate
+      }
+    }
+
+    return {
+      success: false,
+      message: `No backend JSON file found for username '${cleanUser}'.`,
+    };
+  }
+
+  /**
    * 1-Click Save Data File (Excel Daily Matrix or JSON)
-   * This is completely offline, privacy-first, and saves the user's complete dataset
    */
   public saveDatabaseFile(
     readings: BloodSugarReading[],
@@ -63,17 +153,30 @@ export class UserService {
     const userTag = user?.displayName ? user.displayName.replace(/\s+/g, '_') : 'User';
 
     if (format === 'excel') {
-      // User's exact 4-column daily matrix format with clinical legend!
       exportToDailyMatrixExcel(readings, settings, `Blood_Sugar_Logbook_${userTag}_${dateStr}.xlsx`);
     } else {
-      // Complete JSON document format
       exportJSONBackup(readings, settings);
     }
   }
 
   /**
+   * Save user's JSON file specifically formatted as the backend file (`<username>.json`)
+   */
+  public saveBackendJsonFile(readings: BloodSugarReading[], username: string, displayName?: string): void {
+    const payload = {
+      username,
+      displayName: displayName || username,
+      version: '1.0.0',
+      exportedAt: new Date().toISOString(),
+      totalReadings: readings.length,
+      readings,
+    };
+    const jsonString = JSON.stringify(payload, null, 2);
+    downloadFile(jsonString, `${username}.json`, 'application/json');
+  }
+
+  /**
    * 1-Click Load Data File (.xlsx, .xls, .json, .csv)
-   * Automatically parses any supported data file and extracts all readings
    */
   public async loadDatabaseFile(
     file: File,
@@ -112,7 +215,6 @@ export class UserService {
 
   /**
    * Optional Live Cloud Sync via Firebase Realtime Database
-   * If user sets firebaseDbUrl in settings, both laptop and mobile stay in live sync automatically!
    */
   public async syncWithFirebase(
     firebaseDbUrl: string,
