@@ -13,20 +13,24 @@ export class UserService {
   /**
    * Log in or create a user profile
    */
-  public createOrLogin(username: string, displayName?: string, currentUsers: UserProfile[] = []): {
+  public createOrLogin(
+    username: string,
+    displayName?: string,
+    currentUsers: UserProfile[] = []
+  ): {
     user: UserProfile;
     updatedUsers: UserProfile[];
   } {
     const clean = this.sanitizeUsername(username);
     if (!clean) {
-      throw new Error('Please enter a valid username (letters and numbers only).');
+      throw new Error('Please enter a valid username (letters, numbers, underscores, hyphens only).');
     }
 
     const now = Date.now();
     const existingIndex = currentUsers.findIndex((u) => u.username === clean);
 
     let user: UserProfile;
-    let updatedUsers = [...currentUsers];
+    const updatedUsers = [...currentUsers];
 
     if (existingIndex >= 0) {
       user = {
@@ -50,94 +54,119 @@ export class UserService {
   }
 
   /**
-   * Automatically loads the user's backend JSON file from server/GitHub Pages/Firebase
-   * Without the user having to manually export/import anything!
+   * Real-time Cloud Backup via Firebase Realtime Database
+   * Directly PUTs readings to <firebaseUrl>/users/<username>.json
    */
-  public async fetchUserFromBackend(
+  public async backupToFirebase(
+    firebaseDbUrl: string,
     username: string,
-    firebaseDbUrl?: string
+    readings: BloodSugarReading[],
+    settings: AppSettings
+  ): Promise<{ success: boolean; message: string }> {
+    const cleanUser = this.sanitizeUsername(username);
+    if (!cleanUser) {
+      return { success: false, message: 'Invalid username.' };
+    }
+
+    let baseUrl = firebaseDbUrl.trim().replace(/\/+$/, '');
+    if (!baseUrl.startsWith('http')) {
+      baseUrl = `https://${baseUrl}`;
+    }
+    const endpoint = `${baseUrl}/users/${cleanUser}.json`;
+
+    try {
+      const payload = {
+        username: cleanUser,
+        displayName: settings.currentUser?.displayName || cleanUser,
+        updatedAt: Date.now(),
+        totalReadings: readings.length,
+        unit: settings.unit,
+        readings,
+      };
+
+      const res = await fetch(endpoint, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.ok) {
+        return {
+          success: true,
+          message: `Backed up ${readings.length} readings for '${cleanUser}' to Cloud successfully!`,
+        };
+      } else {
+        const errorText = await res.text();
+        return {
+          success: false,
+          message: `Cloud responded with error (${res.status}): ${errorText.slice(0, 80)}. Check Firebase rules.`,
+        };
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        message: `Network error connecting to Cloud: ${err?.message || 'Check connection'}`,
+      };
+    }
+  }
+
+  /**
+   * Real-time Cloud Restore via Firebase Realtime Database
+   * Directly GETs readings from <firebaseUrl>/users/<username>.json
+   */
+  public async restoreFromFirebase(
+    firebaseDbUrl: string,
+    username: string
   ): Promise<{
     success: boolean;
     readings?: BloodSugarReading[];
     message: string;
-    source?: string;
   }> {
     const cleanUser = this.sanitizeUsername(username);
     if (!cleanUser) {
       return { success: false, message: 'Invalid username.' };
     }
 
-    const candidateUrls: { name: string; url: string }[] = [];
-    const timestamp = Date.now();
-
-    // 1. If Firebase DB is configured
-    if (firebaseDbUrl && firebaseDbUrl.startsWith('http')) {
-      const cleanBase = firebaseDbUrl.replace(/\/+$/, '');
-      candidateUrls.push({
-        name: 'Firebase Cloud Database',
-        url: `${cleanBase}/users/${cleanUser}.json?t=${timestamp}`,
-      });
+    let baseUrl = firebaseDbUrl.trim().replace(/\/+$/, '');
+    if (!baseUrl.startsWith('http')) {
+      baseUrl = `https://${baseUrl}`;
     }
+    const endpoint = `${baseUrl}/users/${cleanUser}.json?t=${Date.now()}`;
 
-    // 2. Relative site URL based on current page directory
     try {
-      const docPath = window.location.pathname;
-      const cleanDir = docPath.substring(0, docPath.lastIndexOf('/') + 1) || '/';
-      candidateUrls.push({
-        name: 'Site Backend File',
-        url: `${window.location.origin}${cleanDir}data/users/${cleanUser}.json?t=${timestamp}`,
-      });
-    } catch {
-      // Fallback relative
-    }
-
-    // 3. Explicit GitHub Pages deployment URL
-    candidateUrls.push({
-      name: 'GitHub Pages Backend',
-      url: `https://ammadasif.github.io/Blood-Sugar-AI/data/users/${cleanUser}.json?t=${timestamp}`,
-    });
-
-    // 4. Raw GitHub fallback (CORS friendly, guaranteed live upon git push)
-    candidateUrls.push({
-      name: 'GitHub Repository Backend',
-      url: `https://raw.githubusercontent.com/ammadasif/Blood-Sugar-AI/main/public/data/users/${cleanUser}.json?t=${timestamp}`,
-    });
-
-    // 5. Root path fallback
-    candidateUrls.push({
-      name: 'Root Path Fallback',
-      url: `/data/users/${cleanUser}.json?t=${timestamp}`,
-    });
-
-    for (const candidate of candidateUrls) {
-      try {
-        const res = await fetch(candidate.url, { cache: 'no-cache' });
-        if (res.ok) {
-          const data = await res.json();
-          const readings: BloodSugarReading[] = Array.isArray(data)
-            ? data
-            : Array.isArray(data?.readings)
-            ? data.readings
-            : [];
-
-          if (readings.length > 0) {
-            return {
-              success: true,
-              readings,
-              message: `Retrieved ${readings.length} readings from backend file for user '${cleanUser}'!`,
-              source: candidate.name,
-            };
-          }
+      const res = await fetch(endpoint, { cache: 'no-cache' });
+      if (res.ok) {
+        const data = await res.json();
+        if (!data) {
+          return {
+            success: false,
+            message: `No backed-up readings found in cloud for username '${cleanUser}'.`,
+          };
         }
-      } catch (e) {
-        // Try next candidate
-      }
-    }
 
-    return {
-      success: false,
-      message: `No backend JSON file found for username '${cleanUser}'.`,
-    };
+        const readings: BloodSugarReading[] = Array.isArray(data)
+          ? data
+          : Array.isArray(data.readings)
+          ? data.readings
+          : [];
+
+        return {
+          success: true,
+          readings,
+          message: `Retrieved ${readings.length} readings from Cloud for '${cleanUser}'!`,
+        };
+      } else {
+        return {
+          success: false,
+          message: `Cloud responded with error (${res.status}). Verify database URL.`,
+        };
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        message: `Network error connecting to Cloud: ${err?.message || 'Check connection'}`,
+      };
+    }
   }
 
   /**
@@ -160,7 +189,7 @@ export class UserService {
   }
 
   /**
-   * Save user's JSON file specifically formatted as the backend file (`<username>.json`)
+   * Save user's JSON file specifically formatted as `<username>_backup.json`
    */
   public saveBackendJsonFile(readings: BloodSugarReading[], username: string, displayName?: string): void {
     const payload = {
@@ -172,7 +201,7 @@ export class UserService {
       readings,
     };
     const jsonString = JSON.stringify(payload, null, 2);
-    downloadFile(jsonString, `${username}.json`, 'application/json');
+    downloadFile(jsonString, `${username}_backup.json`, 'application/json');
   }
 
   /**
@@ -211,116 +240,6 @@ export class UserService {
       count: validReadings.length,
       format: result.formatDetected === 'matrix_daily' ? 'excel_matrix' : 'excel_flat',
     };
-  }
-
-  /**
-   * Optional Live Cloud Sync via Firebase Realtime Database
-   */
-  public async syncWithFirebase(
-    firebaseDbUrl: string,
-    username: string,
-    readings: BloodSugarReading[],
-    settings: AppSettings,
-    mode: 'push' | 'pull' | 'merge' = 'merge'
-  ): Promise<{
-    success: boolean;
-    message: string;
-    readings?: BloodSugarReading[];
-  }> {
-    const cleanUser = this.sanitizeUsername(username);
-    if (!cleanUser) {
-      return { success: false, message: 'Invalid username.' };
-    }
-
-    const cleanBase = firebaseDbUrl.replace(/\/+$/, '');
-    const endpoint = `${cleanBase}/users/${cleanUser}.json`;
-
-    try {
-      if (mode === 'pull' || mode === 'merge') {
-        const res = await fetch(endpoint);
-        if (res.ok) {
-          const remoteData = await res.json();
-          if (remoteData && Array.isArray(remoteData.readings)) {
-            if (mode === 'pull') {
-              return {
-                success: true,
-                message: `Retrieved ${remoteData.readings.length} readings from Firebase cloud for '${cleanUser}'.`,
-                readings: remoteData.readings,
-              };
-            }
-
-            // Merge mode
-            const existingMap = new Map<string, BloodSugarReading>();
-            const fpSet = new Set<string>();
-            const getFp = (r: BloodSugarReading) => `${r.date}_${r.time}_${r.type}_${r.value}`;
-
-            readings.forEach((r) => {
-              existingMap.set(r.id, r);
-              fpSet.add(getFp(r));
-            });
-
-            remoteData.readings.forEach((cr: BloodSugarReading) => {
-              const fp = getFp(cr);
-              if (!existingMap.has(cr.id) && !fpSet.has(fp)) {
-                existingMap.set(cr.id, cr);
-                fpSet.add(fp);
-              }
-            });
-
-            const merged = Array.from(existingMap.values()).sort((a, b) =>
-              `${b.date}T${b.time}`.localeCompare(`${a.date}T${a.time}`)
-            );
-
-            // Push merged back
-            await fetch(endpoint, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                username: cleanUser,
-                updatedAt: Date.now(),
-                readings: merged,
-              }),
-            });
-
-            return {
-              success: true,
-              message: `Unified ${merged.length} readings across devices with Firebase!`,
-              readings: merged,
-            };
-          }
-        }
-      }
-
-      // Push mode
-      const pushRes = await fetch(endpoint, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: cleanUser,
-          updatedAt: Date.now(),
-          readings,
-          unit: settings.unit,
-        }),
-      });
-
-      if (pushRes.ok) {
-        return {
-          success: true,
-          message: `Saved ${readings.length} readings to Firebase cloud under '${cleanUser}'!`,
-          readings,
-        };
-      } else {
-        return {
-          success: false,
-          message: `Firebase responded with status ${pushRes.status}. Check database rules.`,
-        };
-      }
-    } catch (err: any) {
-      return {
-        success: false,
-        message: `Failed to connect to Firebase: ${err?.message || 'Network error'}`,
-      };
-    }
   }
 }
 

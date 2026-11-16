@@ -14,6 +14,7 @@ import {
   Eye,
   Filter,
   Sparkles,
+  RotateCcw,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -38,6 +39,7 @@ import { convertFromInternal, formatBloodSugar, formatDate, formatDateDMY, forma
 import { MedicalDisclaimer } from '../components/MedicalDisclaimer';
 import { AnalysisModal } from '../components/AnalysisModal';
 import { EditReadingModal } from '../components/EditReadingModal';
+import { BackupRestoreModal } from '../components/BackupRestoreModal';
 
 type DateFilterType = 'all' | 'today' | '7days' | '30days' | 'this_month' | 'last_month' | 'custom';
 
@@ -49,6 +51,7 @@ export const DashboardView: React.FC = () => {
   const [customEnd, setCustomEnd] = useState<string>('');
   const [selectedReadingForAnalysis, setSelectedReadingForAnalysis] = useState<BloodSugarReading | null>(null);
   const [selectedReadingForEdit, setSelectedReadingForEdit] = useState<BloodSugarReading | null>(null);
+  const [showRestoreModal, setShowRestoreModal] = useState<boolean>(false);
 
   // Filter readings based on active date range
   const filteredReadings = useMemo(() => {
@@ -323,10 +326,17 @@ export const DashboardView: React.FC = () => {
               <span>Record Your First Reading</span>
             </button>
             <button
-              onClick={loadSampleData}
+              onClick={() => setShowRestoreModal(true)}
+              className="px-5 py-2.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-500/20 transition flex items-center gap-2"
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span>Restore Readings from Cloud</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('import_export')}
               className="px-5 py-2.5 rounded-xl text-xs font-semibold bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/80 transition flex items-center gap-2"
             >
-              <span>Load 14-Day Sample History</span>
+              <span>Import Excel / Backup File</span>
             </button>
           </div>
         </div>
@@ -779,6 +789,12 @@ export const DashboardView: React.FC = () => {
           }}
         />
       )}
+      {/* Backup & Restore Modal */}
+      <BackupRestoreModal
+        isOpen={showRestoreModal}
+        onClose={() => setShowRestoreModal(false)}
+        defaultMode="restore"
+      />
     </div>
   );
 };

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { BloodSugarProvider, useBloodSugar } from './context/BloodSugarContext';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
+import { WelcomeScreen } from './components/WelcomeScreen';
 import { DashboardView } from './views/DashboardView';
 import { AddReadingView } from './views/AddReadingView';
 import { HistoryView } from './views/HistoryView';
@@ -12,7 +13,7 @@ import { SettingsView } from './views/SettingsView';
 import { HeartPulse } from 'lucide-react';
 
 const MainLayout: React.FC = () => {
-  const { activeTab, isLoading } = useBloodSugar();
+  const { activeTab, isLoading, currentUser } = useBloodSugar();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const renderActiveView = () => {
@@ -49,6 +50,11 @@ const MainLayout: React.FC = () => {
     );
   }
 
+  // First Screen: If user has not entered a username yet, show WelcomeScreen
+  if (!currentUser) {
+    return <WelcomeScreen />;
+  }
+
   return (
     <div className="min-h-screen bg-slate-50/70 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col">
       {/* Sidebar Navigation */}
@@ -62,7 +68,7 @@ const MainLayout: React.FC = () => {
 
         {/* Global Minimal Footer */}
         <footer className="border-t border-slate-200/60 dark:border-slate-800/60 py-4 px-6 text-center text-[11px] text-slate-400">
-          GlucoTrack Pro • Client-Side Secure Health Journal • All data remains strictly on your device.
+          GlucoTrack Pro • Client-Side Secure Health Journal • User: @{currentUser.username}
         </footer>
       </div>
     </div>
@@ -78,4 +84,3 @@ export function App() {
 }
 
 export default App;
-

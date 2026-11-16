@@ -26,20 +26,20 @@ interface BloodSugarContextType {
   markBackupCompleted: () => void;
 
   // User Account & Profile
-  loginUser: (username: string, displayName?: string, autoFetchBackend?: boolean) => Promise<UserProfile>;
+  loginUser: (username: string, displayName?: string, firebaseDbUrl?: string) => Promise<UserProfile>;
   logoutUser: () => void;
-  switchProfile: (username: string, autoFetchBackend?: boolean) => Promise<void>;
+  switchProfile: (username: string) => Promise<void>;
 
-  // Backend File Automatic Sync
-  loadUserFromBackend: (targetUser?: string) => Promise<{ success: boolean; message: string; count?: number }>;
-  saveBackendJson: (username?: string) => void;
+  // Real-Time Cloud Backup & Restore
+  backupReadingsToCloud: (customUrl?: string) => Promise<{ success: boolean; message: string }>;
+  restoreReadingsFromCloud: (
+    customUrl?: string,
+    customUsername?: string
+  ) => Promise<{ success: boolean; message: string; count?: number }>;
 
-  // File-Based Database (Save / Load File)
+  // File-Based Backup (Save / Load File)
   saveDataToFile: (format?: 'excel' | 'json') => void;
   loadDataFromFile: (file: File) => Promise<{ count: number; format: string }>;
-
-  // Optional Live Cloud Sync (Firebase)
-  syncWithFirebaseCloud: (mode?: 'push' | 'pull' | 'merge') => Promise<{ success: boolean; message: string }>;
 }
 
 const BloodSugarContext = createContext<BloodSugarContextType | undefined>(undefined);
@@ -78,26 +78,10 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
   }, [settings.theme]);
 
-  // Initial load
+  // Initial load: Only read local database, no hardcoded readings!
   useEffect(() => {
     const init = async () => {
       await reloadData();
-
-      // If user is already signed in and has 0 readings locally, auto-fetch from backend!
-      const current = settingsService.getSettings();
-      if (current.currentUser?.username) {
-        const localReadings = await dbService.getAllReadings();
-        if (localReadings.length === 0) {
-          const res = await userService.fetchUserFromBackend(
-            current.currentUser.username,
-            current.firebaseDbUrl
-          );
-          if (res.success && res.readings && res.readings.length > 0) {
-            await dbService.bulkAddReadings(res.readings);
-            await reloadData();
-          }
-        }
-      }
     };
     init();
   }, [reloadData]);
@@ -119,53 +103,26 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   };
 
   // ───────────────────────────────────────────────
-  // BACKEND FILE AUTO-SYNC
-  // ───────────────────────────────────────────────
-  const loadUserFromBackend = async (
-    targetUser?: string
-  ): Promise<{ success: boolean; message: string; count?: number }> => {
-    const userToLoad = targetUser || settings.currentUser?.username;
-    if (!userToLoad) {
-      return { success: false, message: 'Please enter a username.' };
-    }
-
-    const res = await userService.fetchUserFromBackend(userToLoad, settings.firebaseDbUrl);
-    if (res.success && res.readings && res.readings.length > 0) {
-      await dbService.clearAllReadings();
-      await dbService.bulkAddReadings(res.readings);
-      await reloadData();
-      return { success: true, message: res.message, count: res.readings.length };
-    }
-    return { success: false, message: res.message };
-  };
-
-  const saveBackendJson = (username?: string) => {
-    const user = username || settings.currentUser?.username || 'ammad';
-    const display = settings.currentUser?.displayName || user;
-    userService.saveBackendJsonFile(readings, user, display);
-  };
-
-  // ───────────────────────────────────────────────
   // USER PROFILE & ACCOUNT
   // ───────────────────────────────────────────────
   const loginUser = async (
     username: string,
     displayName?: string,
-    autoFetchBackend: boolean = true
+    firebaseDbUrl?: string
   ): Promise<UserProfile> => {
     const currentList = settings.savedUsers || [];
     const { user, updatedUsers } = userService.createOrLogin(username, displayName, currentList);
 
-    const updated = settingsService.updateSettings({
+    const partialUpdate: Partial<AppSettings> = {
       currentUser: user,
       savedUsers: updatedUsers,
-    });
-    setSettings(updated);
-
-    if (autoFetchBackend) {
-      await loadUserFromBackend(user.username);
+    };
+    if (firebaseDbUrl) {
+      partialUpdate.firebaseDbUrl = firebaseDbUrl.trim();
     }
 
+    const updated = settingsService.updateSettings(partialUpdate);
+    setSettings(updated);
     return user;
   };
 
@@ -176,18 +133,84 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setSettings(updated);
   };
 
-  const switchProfile = async (username: string, autoFetchBackend: boolean = true) => {
+  const switchProfile = async (username: string) => {
     const target = (settings.savedUsers || []).find((u) => u.username === username);
     if (target) {
       const updated = settingsService.updateSettings({
         currentUser: { ...target, lastLoginAt: Date.now() },
       });
       setSettings(updated);
+    }
+  };
 
-      if (autoFetchBackend) {
-        await loadUserFromBackend(target.username);
+  // ───────────────────────────────────────────────
+  // REAL-TIME CLOUD BACKUP & RESTORE
+  // ───────────────────────────────────────────────
+  const backupReadingsToCloud = async (
+    customUrl?: string
+  ): Promise<{ success: boolean; message: string }> => {
+    const url = customUrl || settings.firebaseDbUrl;
+    if (!url) {
+      return {
+        success: false,
+        message: 'No Cloud Database URL configured. Please set your Firebase URL in Settings or enter it here.',
+      };
+    }
+    const username = settings.currentUser?.username;
+    if (!username) {
+      return { success: false, message: 'Please sign in first before backing up readings.' };
+    }
+
+    const res = await userService.backupToFirebase(url, username, readings, settings);
+    if (res.success) {
+      markBackupCompleted();
+      if (customUrl && customUrl !== settings.firebaseDbUrl) {
+        updateSettings({ firebaseDbUrl: customUrl.trim() });
       }
     }
+    return res;
+  };
+
+  const restoreReadingsFromCloud = async (
+    customUrl?: string,
+    customUsername?: string
+  ): Promise<{ success: boolean; message: string; count?: number }> => {
+    const url = customUrl || settings.firebaseDbUrl;
+    const username = customUsername || settings.currentUser?.username;
+
+    if (!url) {
+      return {
+        success: false,
+        message: 'No Cloud Database URL configured. Please enter your Firebase Realtime DB URL.',
+      };
+    }
+    if (!username) {
+      return { success: false, message: 'Please enter a username to restore readings for.' };
+    }
+
+    const res = await userService.restoreFromFirebase(url, username);
+    if (res.success && res.readings) {
+      await dbService.clearAllReadings();
+      if (res.readings.length > 0) {
+        await dbService.bulkAddReadings(res.readings);
+      }
+      await reloadData();
+
+      if (customUrl && customUrl !== settings.firebaseDbUrl) {
+        updateSettings({ firebaseDbUrl: customUrl.trim() });
+      }
+
+      return {
+        success: true,
+        message: `Successfully restored ${res.readings.length} readings for '${username}'!`,
+        count: res.readings.length,
+      };
+    }
+
+    return {
+      success: false,
+      message: res.message || `No readings found in cloud for username '${username}'.`,
+    };
   };
 
   // ───────────────────────────────────────────────
@@ -195,6 +218,7 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   // ───────────────────────────────────────────────
   const saveDataToFile = (format: 'excel' | 'json' = 'excel') => {
     userService.saveDatabaseFile(readings, settings, settings.currentUser, format);
+    markBackupCompleted();
   };
 
   const loadDataFromFile = async (file: File): Promise<{ count: number; format: string }> => {
@@ -204,32 +228,6 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       await reloadData();
     }
     return { count: result.count, format: result.format };
-  };
-
-  // ───────────────────────────────────────────────
-  // OPTIONAL LIVE CLOUD SYNC (FIREBASE)
-  // ───────────────────────────────────────────────
-  const syncWithFirebaseCloud = async (
-    mode: 'push' | 'pull' | 'merge' = 'merge'
-  ): Promise<{ success: boolean; message: string }> => {
-    if (!settings.firebaseDbUrl) {
-      return { success: false, message: 'Firebase Database URL not configured in Settings.' };
-    }
-    const username = settings.currentUser?.username || 'default_user';
-    const res = await userService.syncWithFirebase(
-      settings.firebaseDbUrl,
-      username,
-      readings,
-      settings,
-      mode
-    );
-
-    if (res.success && res.readings) {
-      await dbService.clearAllReadings();
-      await dbService.bulkAddReadings(res.readings);
-      await reloadData();
-    }
-    return res;
   };
 
   // ───────────────────────────────────────────────
@@ -251,11 +249,6 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
     await dbService.addReading(newRecord, settings.storageLimit, settings.autoDeleteOldReadings);
     await reloadData();
-
-    if (settings.firebaseDbUrl) {
-      syncWithFirebaseCloud('push').catch(() => {});
-    }
-
     return newRecord;
   };
 
@@ -266,60 +259,34 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     };
     await dbService.updateReading(updatedRecord);
     await reloadData();
-
-    if (settings.firebaseDbUrl) {
-      syncWithFirebaseCloud('push').catch(() => {});
-    }
-
     return updatedRecord;
   };
 
   const removeReading = async (id: string): Promise<void> => {
     await dbService.deleteReading(id);
     await reloadData();
-
-    if (settings.firebaseDbUrl) {
-      syncWithFirebaseCloud('push').catch(() => {});
-    }
   };
 
   const removeMultipleReadings = async (ids: string[]): Promise<void> => {
     await dbService.deleteMultiple(ids);
     await reloadData();
-
-    if (settings.firebaseDbUrl) {
-      syncWithFirebaseCloud('push').catch(() => {});
-    }
   };
 
   const importReadings = async (newReadings: BloodSugarReading[]): Promise<number> => {
     const count = await dbService.bulkAddReadings(newReadings);
     await reloadData();
-
-    if (settings.firebaseDbUrl) {
-      syncWithFirebaseCloud('push').catch(() => {});
-    }
-
     return count;
   };
 
   const clearAllData = async (): Promise<void> => {
     await dbService.clearAllReadings();
     setReadings([]);
-
-    if (settings.firebaseDbUrl) {
-      syncWithFirebaseCloud('push').catch(() => {});
-    }
   };
 
   const loadSampleData = async () => {
     const samples = generateSampleReadings();
     await dbService.bulkAddReadings(samples);
     await reloadData();
-
-    if (settings.firebaseDbUrl) {
-      syncWithFirebaseCloud('push').catch(() => {});
-    }
   };
 
   return (
@@ -344,11 +311,10 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         loginUser,
         logoutUser,
         switchProfile,
-        loadUserFromBackend,
-        saveBackendJson,
+        backupReadingsToCloud,
+        restoreReadingsFromCloud,
         saveDataToFile,
         loadDataFromFile,
-        syncWithFirebaseCloud,
       }}
     >
       {children}

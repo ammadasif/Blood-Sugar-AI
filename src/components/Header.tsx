@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Menu, Plus, RefreshCw, Bell, User } from 'lucide-react';
+import { Menu, Plus, RefreshCw, Bell, User, CloudUpload, RotateCcw } from 'lucide-react';
 import { useBloodSugar } from '../context/BloodSugarContext';
 import { UserAccountModal } from './UserAccountModal';
+import { BackupRestoreModal } from './BackupRestoreModal';
 
 interface HeaderProps {
   onOpenMobileMenu: () => void;
@@ -10,6 +11,8 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
   const { activeTab, setActiveTab, settings, updateSettings, readings, currentUser } = useBloodSugar();
   const [showAccountModal, setShowAccountModal] = useState(false);
+  const [showBackupModal, setShowBackupModal] = useState(false);
+  const [backupRestoreMode, setBackupRestoreMode] = useState<'backup' | 'restore'>('backup');
 
   const getPageTitle = () => {
     switch (activeTab) {
@@ -39,7 +42,6 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
     updateSettings({ unit: nextUnit });
   };
 
-  // Check if backup reminder is appropriate (if user has > 10 readings and no backup in 7 days)
   const showBackupReminder =
     readings.length >= 10 &&
     !settings.hasDismissedBackupWarning &&
@@ -65,17 +67,46 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2">
           {/* Backup Reminder Banner */}
           {showBackupReminder && (
             <button
-              onClick={() => setActiveTab('import_export')}
+              onClick={() => {
+                setBackupRestoreMode('backup');
+                setShowBackupModal(true);
+              }}
               className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-100 transition animate-pulse"
             >
               <Bell className="w-3.5 h-3.5" />
               <span>Backup Recommended</span>
             </button>
           )}
+
+          {/* Backup Readings Button */}
+          <button
+            onClick={() => {
+              setBackupRestoreMode('backup');
+              setShowBackupModal(true);
+            }}
+            title="Backup readings to Cloud or File"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 dark:hover:bg-emerald-950/80 transition shadow-sm"
+          >
+            <CloudUpload className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            <span className="hidden sm:inline">Backup</span>
+          </button>
+
+          {/* Restore Readings Button */}
+          <button
+            onClick={() => {
+              setBackupRestoreMode('restore');
+              setShowBackupModal(true);
+            }}
+            title="Restore readings from Cloud or File"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-950/80 transition shadow-sm"
+          >
+            <RotateCcw className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+            <span className="hidden sm:inline">Restore</span>
+          </button>
 
           {/* User Account / Profile Button */}
           <button
@@ -94,7 +125,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
             ) : (
               <User className="w-3.5 h-3.5 text-blue-500" />
             )}
-            <span className="truncate max-w-[80px] sm:max-w-[120px]">
+            <span className="truncate max-w-[70px] sm:max-w-[120px]">
               {currentUser ? currentUser.displayName : 'Sign In'}
             </span>
           </button>
@@ -124,6 +155,13 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
 
       {/* User Account Modal */}
       <UserAccountModal isOpen={showAccountModal} onClose={() => setShowAccountModal(false)} />
+
+      {/* Backup & Restore Modal */}
+      <BackupRestoreModal
+        isOpen={showBackupModal}
+        onClose={() => setShowBackupModal(false)}
+        defaultMode={backupRestoreMode}
+      />
     </>
   );
 };
