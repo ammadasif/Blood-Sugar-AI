@@ -1,29 +1,41 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
-import { BloodSugarReading, AppSettings } from '../types';
+import { BloodSugarReading, AppSettings, UserProfile } from '../types';
 import { dbService } from '../services/indexedDB';
 import { settingsService } from '../services/settingsStorage';
 import { generateSampleReadings } from '../utils/sampleData';
-import { cloudSyncService, SyncResult } from '../services/cloudSyncService';
+import { userService } from '../services/userService';
 
 interface BloodSugarContextType {
   readings: BloodSugarReading[];
   settings: AppSettings;
   isLoading: boolean;
-  isSyncing: boolean;
-  syncNotice: string | null;
+  currentUser?: UserProfile;
+  activeTab: string;
+  setActiveTab: (tab: string) => void;
+  toggleTheme: () => void;
+
+  // CRUD operations
   addReading: (reading: Omit<BloodSugarReading, 'id' | 'createdAt' | 'updatedAt'>) => Promise<BloodSugarReading>;
   editReading: (reading: BloodSugarReading) => Promise<BloodSugarReading>;
   removeReading: (id: string) => Promise<void>;
   removeMultipleReadings: (ids: string[]) => Promise<void>;
   importReadings: (newReadings: BloodSugarReading[]) => Promise<number>;
   clearAllData: () => Promise<void>;
-  updateSettings: (partial: Partial<AppSettings>) => void;
   loadSampleData: () => Promise<void>;
+  updateSettings: (partial: Partial<AppSettings>) => void;
   markBackupCompleted: () => void;
-  syncWithCloud: (manualUser?: string, mode?: 'upload' | 'download' | 'merge') => Promise<SyncResult>;
-  activeTab: string;
-  setActiveTab: (tab: string) => void;
-  toggleTheme: () => void;
+
+  // User Account & Profile
+  loginUser: (username: string, displayName?: string) => UserProfile;
+  logoutUser: () => void;
+  switchProfile: (username: string) => void;
+
+  // File-Based Database (Excel / JSON / Text)
+  saveDataToFile: (format?: 'excel' | 'json') => void;
+  loadDataFromFile: (file: File) => Promise<{ count: number; format: string }>;
+
+  // Optional Live Cloud Sync (Firebase)
+  syncWithFirebaseCloud: (mode?: 'push' | 'pull' | 'merge') => Promise<{ success: boolean; message: string }>;
 }
 
 const BloodSugarContext = createContext<BloodSugarContextType | undefined>(undefined);
@@ -32,8 +44,6 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [readings, setReadings] = useState<BloodSugarReading[]>([]);
   const [settings, setSettings] = useState<AppSettings>(settingsService.getSettings());
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string>('dashboard');
 
   const readingsRef = useRef<BloodSugarReading[]>([]);
@@ -64,184 +74,10 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
   }, [settings.theme]);
 
-  // Cloud Sync Handler
-  const syncWithCloud = useCallback(
-    async (
-      manualUser?: string,
-      mode: 'upload' | 'download' | 'merge' = 'merge'
-    ): Promise<SyncResult> => {
-      const activeUser = manualUser || settingsRef.current.username;
-      if (!activeUser) {
-        return { success: false, message: 'Please enter a username to sync your devices.' };
-      }
-
-      setIsSyncing(true);
-      setSyncNotice('Connecting to cloud sync...');
-
-      try {
-        const cleanUser = cloudSyncService.sanitizeUsername(activeUser);
-
-        // 1. DOWNLOAD OR MERGE MODE: Pull remote first
-        if (mode === 'download' || mode === 'merge') {
-          const pullRes = await cloudSyncService.pullFromCloud(cleanUser, settingsRef.current);
-          if (pullRes.success && pullRes.payload?.readings) {
-            const currentLocal = await dbService.getAllReadings();
-
-            if (mode === 'download') {
-              // Direct replace with remote
-              await dbService.clearAllReadings();
-              await dbService.bulkAddReadings(pullRes.payload.readings);
-              await reloadData();
-              const msg = `Synced ${pullRes.payload.readings.length} readings from device profile '${cleanUser}'.`;
-              setSyncNotice(msg);
-              setIsSyncing(false);
-              return { success: true, message: msg, readingsCount: pullRes.payload.readings.length };
-            } else {
-              // Merge mode
-              const { merged, newCount } = cloudSyncService.mergeReadings(
-                currentLocal,
-                pullRes.payload.readings
-              );
-              await dbService.clearAllReadings();
-              await dbService.bulkAddReadings(merged);
-              await reloadData();
-
-              // Push the combined merged dataset back to cloud so both devices have all records
-              await cloudSyncService.pushToCloud(cleanUser, merged, settingsRef.current);
-
-              const now = Date.now();
-              settingsService.updateSettings({
-                username: cleanUser,
-                cloudSyncEnabled: true,
-                lastSyncTimestamp: now,
-              });
-              setSettings(settingsService.getSettings());
-
-              const msg = `Synced! ${merged.length} readings unified across devices (${newCount} new added).`;
-              setSyncNotice(msg);
-              setIsSyncing(false);
-              return { success: true, message: msg, readingsCount: merged.length, updatedAt: now };
-            }
-          } else if (mode === 'download') {
-            const msg = pullRes.message || 'No records found on cloud for this username.';
-            setSyncNotice(msg);
-            setIsSyncing(false);
-            return { success: false, message: msg };
-          }
-        }
-
-        // 2. UPLOAD MODE or fallback initial upload if remote had no records
-        const currentLocal = await dbService.getAllReadings();
-        const pushRes = await cloudSyncService.pushToCloud(cleanUser, currentLocal, settingsRef.current);
-
-        const now = Date.now();
-        settingsService.updateSettings({
-          username: cleanUser,
-          cloudSyncEnabled: true,
-          lastSyncTimestamp: now,
-        });
-        setSettings(settingsService.getSettings());
-
-        setSyncNotice(pushRes.message);
-        setIsSyncing(false);
-        return pushRes;
-      } catch (err: any) {
-        const errorMsg = `Sync notice: ${err?.message || 'Check network connection'}`;
-        setSyncNotice(errorMsg);
-        setIsSyncing(false);
-        return { success: false, message: errorMsg };
-      }
-    },
-    [reloadData]
-  );
-
-  // Background auto-sync helper
-  const triggerBackgroundPush = useCallback(async () => {
-    if (settingsRef.current.cloudSyncEnabled && settingsRef.current.username) {
-      try {
-        const current = await dbService.getAllReadings();
-        await cloudSyncService.pushToCloud(
-          settingsRef.current.username,
-          current,
-          settingsRef.current
-        );
-      } catch (err) {
-        console.warn('Background sync deferred:', err);
-      }
-    }
-  }, []);
-
-  // Initial load: Check IndexedDB + URL Parameters for Cross-Device Sync Link
+  // Initial load
   useEffect(() => {
-    const initApp = async () => {
-      await reloadData();
-
-      // Check URL parameters for 1-click Mobile Sync: ?user=ammad
-      try {
-        const urlParams = new URLSearchParams(window.location.search);
-        const urlUser = urlParams.get('user');
-
-        if (urlUser) {
-          const clean = cloudSyncService.sanitizeUsername(urlUser);
-          if (clean) {
-            settingsService.updateSettings({ username: clean, cloudSyncEnabled: true });
-            setSettings(settingsService.getSettings());
-            // Automatically pull from cloud on initial load
-            await syncWithCloud(clean, 'merge');
-            // Clean URL query without full reload
-            const cleanUrl = `${window.location.origin}${window.location.pathname}${window.location.hash}`;
-            window.history.replaceState({}, document.title, cleanUrl);
-            return;
-          }
-        }
-
-        // Check URL for Import link: ?import=COMPRESSED_DATA (also check hash if redirected)
-        let importParam = urlParams.get('import');
-        if (!importParam && window.location.hash.includes('import=')) {
-          const hashQuery = window.location.hash.includes('?') 
-            ? window.location.hash.split('?')[1] 
-            : window.location.hash.slice(1);
-          importParam = new URLSearchParams(hashQuery).get('import');
-        }
-
-        if (importParam) {
-          try {
-            setSyncNotice('Data import ho raha hai...');
-            const importedReadings = await cloudSyncService.decodeImportParam(importParam);
-            if (importedReadings && importedReadings.length > 0) {
-              const currentLocal = await dbService.getAllReadings();
-              const { merged, newCount } = cloudSyncService.mergeReadings(currentLocal, importedReadings);
-              await dbService.clearAllReadings();
-              await dbService.bulkAddReadings(merged);
-              await reloadData();
-              setSyncNotice(`✅ ${newCount > 0 ? `${newCount} nayi readings import ho gayi!` : 'All readings synced!'} Total: ${merged.length}`);
-              // Clean URL query without full reload
-              window.history.replaceState({}, document.title, window.location.pathname);
-              setTimeout(() => setSyncNotice(null), 7000);
-              return;
-            } else {
-              setSyncNotice('❌ Import link invalid tha ya readings decode nahi hui.');
-              setTimeout(() => setSyncNotice(null), 5000);
-            }
-          } catch (e) {
-            console.warn('QR import failed:', e);
-            setSyncNotice('❌ Data import karne mein error aaya.');
-            setTimeout(() => setSyncNotice(null), 5000);
-          }
-        }
-
-        // If username was already configured, auto-refresh from cloud if enabled
-        const saved = settingsService.getSettings();
-        if (saved.username && saved.cloudSyncEnabled) {
-          syncWithCloud(saved.username, 'merge');
-        }
-      } catch (err) {
-        console.warn('Initial sync check notice:', err);
-      }
-    };
-
-    initApp();
-  }, [reloadData, syncWithCloud]);
+    reloadData();
+  }, [reloadData]);
 
   const toggleTheme = () => {
     const nextTheme = settings.theme === 'dark' ? 'light' : 'dark';
@@ -249,6 +85,93 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setSettings(updated);
   };
 
+  const updateSettings = (partial: Partial<AppSettings>) => {
+    const updated = settingsService.updateSettings(partial);
+    setSettings(updated);
+  };
+
+  const markBackupCompleted = () => {
+    settingsService.recordBackup();
+    setSettings(settingsService.getSettings());
+  };
+
+  // ───────────────────────────────────────────────
+  // USER PROFILE & ACCOUNT
+  // ───────────────────────────────────────────────
+  const loginUser = (username: string, displayName?: string): UserProfile => {
+    const currentList = settings.savedUsers || [];
+    const { user, updatedUsers } = userService.createOrLogin(username, displayName, currentList);
+
+    const updated = settingsService.updateSettings({
+      currentUser: user,
+      savedUsers: updatedUsers,
+    });
+    setSettings(updated);
+    return user;
+  };
+
+  const logoutUser = () => {
+    const updated = settingsService.updateSettings({
+      currentUser: undefined,
+    });
+    setSettings(updated);
+  };
+
+  const switchProfile = (username: string) => {
+    const target = (settings.savedUsers || []).find((u) => u.username === username);
+    if (target) {
+      const updated = settingsService.updateSettings({
+        currentUser: { ...target, lastLoginAt: Date.now() },
+      });
+      setSettings(updated);
+    }
+  };
+
+  // ───────────────────────────────────────────────
+  // FILE-BASED DATABASE (SAVE & LOAD EXCEL / JSON)
+  // ───────────────────────────────────────────────
+  const saveDataToFile = (format: 'excel' | 'json' = 'excel') => {
+    userService.saveDatabaseFile(readings, settings, settings.currentUser, format);
+  };
+
+  const loadDataFromFile = async (file: File): Promise<{ count: number; format: string }> => {
+    const result = await userService.loadDatabaseFile(file, readings, settings);
+    if (result.readings.length > 0) {
+      await dbService.bulkAddReadings(result.readings);
+      await reloadData();
+    }
+    return { count: result.count, format: result.format };
+  };
+
+  // ───────────────────────────────────────────────
+  // OPTIONAL LIVE CLOUD SYNC (FIREBASE)
+  // ───────────────────────────────────────────────
+  const syncWithFirebaseCloud = async (
+    mode: 'push' | 'pull' | 'merge' = 'merge'
+  ): Promise<{ success: boolean; message: string }> => {
+    if (!settings.firebaseDbUrl) {
+      return { success: false, message: 'Firebase Database URL not configured in Settings.' };
+    }
+    const username = settings.currentUser?.username || 'default_user';
+    const res = await userService.syncWithFirebase(
+      settings.firebaseDbUrl,
+      username,
+      readings,
+      settings,
+      mode
+    );
+
+    if (res.success && res.readings) {
+      await dbService.clearAllReadings();
+      await dbService.bulkAddReadings(res.readings);
+      await reloadData();
+    }
+    return res;
+  };
+
+  // ───────────────────────────────────────────────
+  // CRUD OPERATIONS
+  // ───────────────────────────────────────────────
   const addReading = async (
     readingData: Omit<BloodSugarReading, 'id' | 'createdAt' | 'updatedAt'>
   ): Promise<BloodSugarReading> => {
@@ -265,7 +188,12 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
     await dbService.addReading(newRecord, settings.storageLimit, settings.autoDeleteOldReadings);
     await reloadData();
-    triggerBackgroundPush();
+
+    // Auto-sync with Firebase if configured
+    if (settings.firebaseDbUrl) {
+      syncWithFirebaseCloud('push').catch(() => {});
+    }
+
     return newRecord;
   };
 
@@ -276,50 +204,60 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     };
     await dbService.updateReading(updatedRecord);
     await reloadData();
-    triggerBackgroundPush();
+
+    if (settings.firebaseDbUrl) {
+      syncWithFirebaseCloud('push').catch(() => {});
+    }
+
     return updatedRecord;
   };
 
   const removeReading = async (id: string): Promise<void> => {
     await dbService.deleteReading(id);
     await reloadData();
-    triggerBackgroundPush();
+
+    if (settings.firebaseDbUrl) {
+      syncWithFirebaseCloud('push').catch(() => {});
+    }
   };
 
   const removeMultipleReadings = async (ids: string[]): Promise<void> => {
     await dbService.deleteMultiple(ids);
     await reloadData();
-    triggerBackgroundPush();
+
+    if (settings.firebaseDbUrl) {
+      syncWithFirebaseCloud('push').catch(() => {});
+    }
   };
 
   const importReadings = async (newReadings: BloodSugarReading[]): Promise<number> => {
     const count = await dbService.bulkAddReadings(newReadings);
     await reloadData();
-    triggerBackgroundPush();
+
+    if (settings.firebaseDbUrl) {
+      syncWithFirebaseCloud('push').catch(() => {});
+    }
+
     return count;
   };
 
   const clearAllData = async (): Promise<void> => {
     await dbService.clearAllReadings();
     setReadings([]);
-    triggerBackgroundPush();
-  };
 
-  const updateSettings = (partial: Partial<AppSettings>) => {
-    const updated = settingsService.updateSettings(partial);
-    setSettings(updated);
-  };
-
-  const markBackupCompleted = () => {
-    settingsService.recordBackup();
-    setSettings(settingsService.getSettings());
+    if (settings.firebaseDbUrl) {
+      syncWithFirebaseCloud('push').catch(() => {});
+    }
   };
 
   const loadSampleData = async () => {
     const samples = generateSampleReadings();
     await dbService.bulkAddReadings(samples);
     await reloadData();
-    triggerBackgroundPush();
+
+    if (settings.firebaseDbUrl) {
+      syncWithFirebaseCloud('push').catch(() => {});
+    }
   };
 
   return (
@@ -328,21 +266,25 @@ export const BloodSugarProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         readings,
         settings,
         isLoading,
-        isSyncing,
-        syncNotice,
+        currentUser: settings.currentUser,
+        activeTab,
+        setActiveTab,
+        toggleTheme,
         addReading,
         editReading,
         removeReading,
         removeMultipleReadings,
         importReadings,
         clearAllData,
-        updateSettings,
         loadSampleData,
+        updateSettings,
         markBackupCompleted,
-        syncWithCloud,
-        activeTab,
-        setActiveTab,
-        toggleTheme,
+        loginUser,
+        logoutUser,
+        switchProfile,
+        saveDataToFile,
+        loadDataFromFile,
+        syncWithFirebaseCloud,
       }}
     >
       {children}

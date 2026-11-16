@@ -21,7 +21,7 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onMobileClose }) => {
-  const { activeTab, setActiveTab, readings, settings, toggleTheme } = useBloodSugar();
+  const { activeTab, setActiveTab, readings, settings, toggleTheme, currentUser } = useBloodSugar();
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -119,8 +119,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onMobileClose }) =
             </div>
             <span className="font-semibold text-slate-700 dark:text-slate-300">{settings.unit}</span>
           </div>
-          <div className="text-[11px] text-slate-400">
-            Profile: <span className="capitalize font-medium text-slate-600 dark:text-slate-300">{settings.targetProfile.replace('_', ' ')}</span>
+          <div className="text-[11px] text-slate-400 flex items-center justify-between">
+            <span>User: <strong className="text-slate-700 dark:text-slate-300 font-semibold">{currentUser ? currentUser.displayName : 'Guest'}</strong></span>
+            <span className="capitalize text-[10px] bg-slate-200/60 dark:bg-slate-700 px-2 py-0.5 rounded-md font-medium text-slate-600 dark:text-slate-300">
+              {settings.targetProfile.replace('_', ' ')}
+            </span>
           </div>
         </div>
 

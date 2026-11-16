@@ -1,15 +1,15 @@
 import React, { useState } from 'react';
-import { Menu, Plus, RefreshCw, Bell, Cloud } from 'lucide-react';
+import { Menu, Plus, RefreshCw, Bell, User } from 'lucide-react';
 import { useBloodSugar } from '../context/BloodSugarContext';
-import { CloudSyncModal } from './CloudSyncModal';
+import { UserAccountModal } from './UserAccountModal';
 
 interface HeaderProps {
   onOpenMobileMenu: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
-  const { activeTab, setActiveTab, settings, updateSettings, readings, isSyncing } = useBloodSugar();
-  const [showSyncModal, setShowSyncModal] = useState(false);
+  const { activeTab, setActiveTab, settings, updateSettings, readings, currentUser } = useBloodSugar();
+  const [showAccountModal, setShowAccountModal] = useState(false);
 
   const getPageTitle = () => {
     switch (activeTab) {
@@ -77,23 +77,25 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
             </button>
           )}
 
-          {/* Cross-Device Cloud Sync Button / Pill */}
+          {/* User Account / Profile Button */}
           <button
-            onClick={() => setShowSyncModal(true)}
-            title={
-              settings.username
-                ? `Sync Profile: ${settings.username} (Click to open Sync Manager)`
-                : 'Sync data across Laptop & Mobile with your Username'
-            }
+            onClick={() => setShowAccountModal(true)}
+            title={currentUser ? `Signed in as ${currentUser.displayName} (@${currentUser.username})` : 'Sign In / Select User Profile'}
             className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold border transition ${
-              settings.username
+              currentUser
                 ? 'bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800 hover:bg-blue-100'
                 : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200/60 dark:border-slate-700/60 hover:bg-slate-200'
             }`}
           >
-            <Cloud className={`w-3.5 h-3.5 text-blue-500 ${isSyncing ? 'animate-bounce' : ''}`} />
+            {currentUser ? (
+              <span className="w-5 h-5 rounded-lg bg-blue-600 text-white flex items-center justify-center text-[10px] font-black">
+                {currentUser.displayName.charAt(0).toUpperCase()}
+              </span>
+            ) : (
+              <User className="w-3.5 h-3.5 text-blue-500" />
+            )}
             <span className="truncate max-w-[80px] sm:max-w-[120px]">
-              {settings.username ? settings.username : 'Sync Devices'}
+              {currentUser ? currentUser.displayName : 'Sign In'}
             </span>
           </button>
 
@@ -120,8 +122,8 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
         </div>
       </header>
 
-      {/* Cloud Sync Modal */}
-      <CloudSyncModal isOpen={showSyncModal} onClose={() => setShowSyncModal(false)} />
+      {/* User Account Modal */}
+      <UserAccountModal isOpen={showAccountModal} onClose={() => setShowAccountModal(false)} />
     </>
   );
 };

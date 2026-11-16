@@ -69,6 +69,14 @@ export interface ReadingAnalysis {
   };
 }
 
+export interface UserProfile {
+  id: string; // e.g. 'ammad'
+  username: string; // alphanumeric lowercase
+  displayName: string; // e.g. 'Ammad Asif'
+  createdAt: number;
+  lastLoginAt: number;
+}
+
 export interface AppSettings {
   unit: BloodSugarUnit;
   targetProfile: TargetProfile;
@@ -78,10 +86,9 @@ export interface AppSettings {
   theme: 'light' | 'dark';
   hasDismissedBackupWarning?: boolean;
   lastBackupDate?: string;
-  username?: string;
-  cloudSyncEnabled?: boolean;
-  lastSyncTimestamp?: number;
-  customSyncUrl?: string;
+  currentUser?: UserProfile;
+  savedUsers?: UserProfile[];
+  firebaseDbUrl?: string; // Optional user Firebase Realtime DB URL for real-time live sync
 }
 
 export interface ReadingFilter {
