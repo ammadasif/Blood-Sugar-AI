@@ -1,16 +1,30 @@
-import React, { useState } from 'react';
+import React, { useState, lazy, Suspense } from 'react';
 import { BloodSugarProvider, useBloodSugar } from './context/BloodSugarContext';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { DashboardView } from './views/DashboardView';
-import { AddReadingView } from './views/AddReadingView';
-import { HistoryView } from './views/HistoryView';
-import { AnalyticsView } from './views/AnalyticsView';
-import { ReportsView } from './views/ReportsView';
-import { ImportExportView } from './views/ImportExportView';
-import { SettingsView } from './views/SettingsView';
-import { HeartPulse } from 'lucide-react';
+import { HeartPulse, Loader2 } from 'lucide-react';
+
+// Code-split secondary views for ultra-fast initial bundle loading
+const AddReadingView = lazy(() =>
+  import('./views/AddReadingView').then((m) => ({ default: m.AddReadingView }))
+);
+const HistoryView = lazy(() =>
+  import('./views/HistoryView').then((m) => ({ default: m.HistoryView }))
+);
+const AnalyticsView = lazy(() =>
+  import('./views/AnalyticsView').then((m) => ({ default: m.AnalyticsView }))
+);
+const ReportsView = lazy(() =>
+  import('./views/ReportsView').then((m) => ({ default: m.ReportsView }))
+);
+const ImportExportView = lazy(() =>
+  import('./views/ImportExportView').then((m) => ({ default: m.ImportExportView }))
+);
+const SettingsView = lazy(() =>
+  import('./views/SettingsView').then((m) => ({ default: m.SettingsView }))
+);
 
 const MainLayout: React.FC = () => {
   const { activeTab, isLoading, currentUser } = useBloodSugar();
@@ -64,7 +78,17 @@ const MainLayout: React.FC = () => {
       <div className="lg:pl-64 flex flex-col flex-1 min-h-screen transition-all">
         <Header onOpenMobileMenu={() => setMobileSidebarOpen(true)} />
 
-        <main className="flex-1 p-4 sm:p-6 lg:p-8">{renderActiveView()}</main>
+        <main className="flex-1 p-4 sm:p-6 lg:p-8">
+          <Suspense
+            fallback={
+              <div className="min-h-[400px] flex items-center justify-center text-slate-400">
+                <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+              </div>
+            }
+          >
+            {renderActiveView()}
+          </Suspense>
+        </main>
 
         {/* Global Minimal Footer */}
         <footer className="border-t border-slate-200/60 dark:border-slate-800/60 py-4 px-6 text-center text-[11px] text-slate-400">

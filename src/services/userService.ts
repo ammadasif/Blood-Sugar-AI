@@ -189,22 +189,6 @@ export class UserService {
   }
 
   /**
-   * Save user's JSON file specifically formatted as `<username>_backup.json`
-   */
-  public saveBackendJsonFile(readings: BloodSugarReading[], username: string, displayName?: string): void {
-    const payload = {
-      username,
-      displayName: displayName || username,
-      version: '1.0.0',
-      exportedAt: new Date().toISOString(),
-      totalReadings: readings.length,
-      readings,
-    };
-    const jsonString = JSON.stringify(payload, null, 2);
-    downloadFile(jsonString, `${username}_backup.json`, 'application/json');
-  }
-
-  /**
    * 1-Click Load Data File (.xlsx, .xls, .json, .csv)
    */
   public async loadDatabaseFile(
